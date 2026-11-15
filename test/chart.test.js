@@ -79,7 +79,9 @@ test('renderPriceChart dựng đầy đủ SVG, đường trung bình, tooltip t
       },
       replaceChildren(...items) {
         children.length = 0;
-        for (const item of items) if (item != null) children.push(item);
+        for (const item of items) {
+          children.push(item == null ? String(item) : item);
+        }
       },
       addEventListener(type, cb) {
         listeners[type] = listeners[type] || [];
@@ -136,21 +138,36 @@ test('renderPriceChart dựng đầy đủ SVG, đường trung bình, tooltip t
     const circles = mockElements.filter((el) => el.tag === 'circle');
     assert.equal(circles.length, 3);
 
-    // Kích hoạt hover mouseenter trên dot đầu tiên
+    // Kích hoạt hover mouseenter trên dot đầu tiên (vị thế đang mở: qtyAfter > 0)
     circles[0].trigger('mouseenter');
     assert.equal(tooltip.hidden, false);
-    assert.ok(tooltip.children.length >= 2);
+    assert.equal(tooltip.children.length, 3);
     assert.ok(tooltip.children[0].children[0].includes('Mua'));
     assert.ok(tooltip.children[1].children[0].includes('BTCUSDT: 0.1 @ 60,000.00'));
+    assert.ok(tooltip.children[2].children[0].includes('Giá TB sau lệnh: 60,000.00'));
 
     // Kích hoạt mouseleave để ẩn tooltip
     circles[0].trigger('mouseleave');
+    assert.equal(tooltip.hidden, true);
+
+    // Kích hoạt hover mouseenter trên sell dot (qtyAfter === 0: vị thế đã tất toán)
+    circles[2].trigger('mouseenter');
+    assert.equal(tooltip.hidden, false);
+    assert.equal(tooltip.children.length, 2);
+    assert.ok(tooltip.children[0].children[0].includes('Bán'));
+    assert.ok(tooltip.children[1].children[0].includes('BTCUSDT: 0.2 @ 70,000.00'));
+    assert.ok(!tooltip.children.includes('null'));
+    assert.ok(!tooltip.children.includes(null));
+
+    // Kích hoạt mouseleave để ẩn tooltip
+    circles[2].trigger('mouseleave');
     assert.equal(tooltip.hidden, true);
 
     // Figcaption kiểm tra chú giải
     const figcaption = res[2];
     assert.equal(figcaption.tag, 'figcaption');
     assert.ok(figcaption.children.length >= 4);
+    assert.equal(figcaption.children[0].children[0].className, 'key');
   } finally {
     if (prevDoc) globalThis.document = prevDoc;
     else delete globalThis.document;

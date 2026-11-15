@@ -167,11 +167,12 @@ export function renderPriceChart({ history, currentPrice, openOrders = [] }) {
       crosshair.setAttribute('x1', cx.toFixed(1));
       crosshair.setAttribute('x2', cx.toFixed(1));
       crosshair.setAttribute('visibility', 'visible');
-      tooltip.replaceChildren(
+      const nodes = [
         domEl('div', 'tt-head', `${SIDE_LABEL[f.side] ?? f.side} · ${fmtTime(f.time)}`),
         domEl('div', 'tt-row', `${f.symbol}: ${fmtQty(f.qty)} @ ${fmtPrice(f.price)}`),
-        f.qtyAfter > 0 ? domEl('div', 'tt-sub', `Giá TB sau lệnh: ${fmtPrice(f.avgAfter)}`) : null,
-      );
+      ];
+      if (f.qtyAfter > 0) nodes.push(domEl('div', 'tt-sub', `Giá TB sau lệnh: ${fmtPrice(f.avgAfter)}`));
+      tooltip.replaceChildren(...nodes);
       tooltip.hidden = false;
       const pctX = (cx / W) * 100;
       const pctY = (cy / H) * 100;
@@ -200,7 +201,7 @@ export function renderPriceChart({ history, currentPrice, openOrders = [] }) {
   }
   out.push(stage);
 
-  const key = (cls, label) => domEl('span', '', [domEl('i', 'key ' + cls), label]);
+  const key = (cls, label) => domEl('span', '', [domEl('i', cls ? `key ${cls}` : 'key'), label]);
   out.push(domEl('figcaption', '', [
     key('', 'Giá trung bình'),
     key('buy', 'Mua'),
