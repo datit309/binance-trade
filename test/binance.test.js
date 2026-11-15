@@ -135,3 +135,39 @@ test('định dạng kết quả', async () => {
   assert.equal(k.get('startTime'), '60000');
   assert.equal(k.get('limit'), '1000');
 });
+
+test('accountBalances tách free, locked và total', async () => {
+  const s = setup({
+    '/api/v3/account': () => json({
+      balances: [
+        { asset: 'BTC', free: '0.5', locked: '0.25' },
+        { asset: 'USDT', free: '100', locked: '400' },
+        { asset: 'ETH', free: '0', locked: '0' },
+      ],
+    }),
+  });
+  assert.deepEqual(await s.client.accountBalances(), {
+    total: { BTC: 0.75, USDT: 500 },
+    free: { BTC: 0.5, USDT: 100 },
+    locked: { BTC: 0.25, USDT: 400 },
+  });
+  const [c] = s.of('/api/v3/account');
+  assert.equal(c.params.get('omitZeroBalances'), 'true');
+  assert.ok(c.params.get('signature'));
+});
+
+test('openOrders ký HMAC khi lấy tất cả và khi truyền symbol', async () => {
+  const sample = [{ symbol: 'BTCUSDT', orderId: 11, side: 'BUY', type: 'LIMIT', price: '60000' }];
+  const s = setup({ '/api/v3/openOrders': () => json(sample) });
+
+  assert.deepEqual(await s.client.openOrders(), sample);
+  assert.deepEqual(await s.client.openOrders('BTCUSDT'), sample);
+
+  const calls = s.of('/api/v3/openOrders');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].params.get('symbol'), null);
+  assert.equal(calls[1].params.get('symbol'), 'BTCUSDT');
+  assert.equal(calls[0].headers['X-MBX-APIKEY'], 'KEY');
+  assert.match(calls[0].params.get('signature'), /^[0-9a-f]{64}$/);
+});
+

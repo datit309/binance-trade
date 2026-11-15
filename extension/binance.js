@@ -96,14 +96,27 @@ export function createClient({
       return symbols.map((s) => ({ symbol: s.symbol, base: s.baseAsset, quote: s.quoteAsset }));
     },
 
-    async account() {
+    async accountBalances() {
       const { balances } = await request('/api/v3/account', { omitZeroBalances: 'true' }, { signed: true });
-      const out = {};
+      const total = {};
+      const free = {};
+      const locked = {};
       for (const b of balances) {
-        const total = Number(b.free) + Number(b.locked);
-        if (total > 0) out[b.asset] = total;
+        const f = Number(b.free);
+        const l = Number(b.locked);
+        const sum = f + l;
+        if (sum > 0) {
+          total[b.asset] = sum;
+          free[b.asset] = f;
+          locked[b.asset] = l;
+        }
       }
-      return out;
+      return { total, free, locked };
+    },
+
+    async account() {
+      const { total } = await this.accountBalances();
+      return total;
     },
 
     async apiRestrictions() {
@@ -113,6 +126,10 @@ export function createClient({
 
     myTrades(symbol, fromId) {
       return request('/api/v3/myTrades', { symbol, fromId: String(fromId), limit: '1000' }, { signed: true });
+    },
+
+    openOrders(symbol) {
+      return request('/api/v3/openOrders', symbol ? { symbol } : {}, { signed: true });
     },
 
     async tickerPrices() {
