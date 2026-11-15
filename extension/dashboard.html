@@ -1,7 +1,208 @@
 <!doctype html>
 <html lang="vi">
-<meta charset="utf-8">
-<title>Giá vốn Spot</title>
-<pre id="out">…</pre>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Giá vốn Spot</title>
+  <link rel="icon" href="icons/48.png">
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+
+<!-- Chưa có key -->
+<main id="screen-setup" class="center-screen" hidden>
+  <form id="key-form" class="card setup" novalidate>
+    <img src="icons/128.png" alt="" width="48" height="48">
+    <h1>Giá vốn Spot</h1>
+    <p class="lead">Kết nối tài khoản Binance để xem giá vốn trung bình và lãi/lỗ từng coin bạn đang giữ.</p>
+
+    <ol class="steps">
+      <li>Trên Binance, mở <b>Tài khoản → Quản lý API → Tạo API</b>.</li>
+      <li>Chỉ bật <b>Cho phép đọc</b> (Enable Reading). Không bật giao dịch hay rút tiền.</li>
+      <li>Dán API Key và Secret Key vào bên dưới.</li>
+    </ol>
+
+    <label for="api-key">API Key</label>
+    <input id="api-key" name="apiKey" autocomplete="off" spellcheck="false" required>
+    <label for="api-secret">Secret Key</label>
+    <input id="api-secret" name="secret" type="password" autocomplete="off" spellcheck="false" required>
+
+    <p id="key-error" class="field-error" role="alert" hidden></p>
+    <button id="key-submit" class="btn primary block" type="submit">Lưu và đồng bộ</button>
+    <button id="key-cancel" class="btn ghost block" type="button" hidden>Hủy</button>
+
+    <p class="note">Key lưu trên máy này, không mã hóa trên đĩa, chỉ gửi tới api.binance.com.</p>
+    <p class="note"><a href="?demo=1">Xem thử với dữ liệu mẫu</a></p>
+  </form>
+</main>
+
+<!-- Tab khác đang giữ database -->
+<main id="screen-locked" class="center-screen" hidden>
+  <div class="card setup">
+    <h1>Đang mở ở tab khác</h1>
+    <p class="lead">Dashboard đang mở ở một tab khác. Đóng tab này và dùng tab kia.</p>
+    <button id="locked-retry" class="btn block" type="button">Thử lại</button>
+  </div>
+</main>
+
+<div id="screen-main" hidden>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <img src="icons/48.png" alt="" width="28" height="28">
+      <h1>Giá vốn Spot</h1>
+      <span id="sync-status" class="muted"></span>
+      <button id="btn-sync" class="btn primary" type="button">Đồng bộ</button>
+      <button id="btn-settings" class="btn icon" type="button" aria-label="Cài đặt" title="Cài đặt">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm7.4-3.5c0-.5 0-.9-.1-1.3l2-1.5-2-3.4-2.3.9c-.7-.6-1.4-1-2.2-1.3L14.4 3h-4l-.4 2.4c-.8.3-1.5.7-2.2 1.3l-2.3-.9-2 3.4 2 1.5a7 7 0 0 0 0 2.6l-2 1.5 2 3.4 2.3-.9c.7.6 1.4 1 2.2 1.3l.4 2.4h4l.4-2.4c.8-.3 1.5-.7 2.2-1.3l2.3.9 2-3.4-2-1.5c.1-.4.1-.8.1-1.3Z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="page">
+    <div id="demo-banner" class="banner info" hidden>
+      <span>Đang xem dữ liệu mẫu, không phải tài khoản của bạn.</span>
+      <a class="btn small" href="dashboard.html">Thoát</a>
+    </div>
+    <div id="key-warning" class="banner warn" role="status" hidden>
+      <span>Key này có quyền giao dịch/rút tiền. Extension chỉ cần quyền đọc; nên tạo key chỉ đọc.</span>
+      <button class="btn small ghost" type="button" data-dismiss="key-warning">Đã hiểu</button>
+    </div>
+    <div id="error" class="banner error" role="alert" hidden>
+      <span id="error-text"></span>
+      <button id="error-retry" class="btn small" type="button">Thử lại</button>
+      <button class="btn small ghost" type="button" data-dismiss="error" aria-label="Đóng thông báo">Đóng</button>
+    </div>
+
+    <section id="progress" class="panel progress" hidden>
+      <progress id="progress-bar" max="1" value="0"></progress>
+      <p id="progress-text" aria-live="polite"></p>
+    </section>
+
+    <section class="panel" aria-label="Tổng quan">
+      <div class="kpis">
+        <div class="kpi"><h2>Vốn đang giữ</h2><p id="stat-cost" class="num big"></p><p class="unit">USDT</p></div>
+        <div class="kpi"><h2>Giá trị hiện tại</h2><p id="stat-value" class="num big"></p><p class="unit">USDT</p></div>
+        <div class="kpi"><h2>Lãi/lỗ chưa chốt</h2><p id="stat-unrealized" class="num big"></p><p id="stat-unrealized-pct" class="unit"></p></div>
+        <div class="kpi"><h2>Lãi/lỗ đã chốt</h2><p id="stat-realized" class="num big"></p><p class="unit">USDT</p></div>
+        <div class="kpi"><h2>Tổng lãi/lỗ</h2><p id="stat-total" class="num big"></p><p class="unit">USDT · chưa chốt + đã chốt</p></div>
+      </div>
+      <div id="alloc" class="alloc" hidden>
+        <div id="alloc-bar" class="alloc-bar" role="img" aria-label="Tỷ trọng danh mục"></div>
+        <ul id="alloc-legend" class="alloc-legend"></ul>
+      </div>
+    </section>
+
+    <div class="toolbar">
+      <input id="search" type="search" placeholder="Tìm coin…" aria-label="Tìm coin" autocomplete="off">
+      <span id="row-count"></span>
+      <label class="check"><input id="hide-small" type="checkbox"> Ẩn coin dưới 1 USDT</label>
+    </div>
+
+    <section class="panel table-card">
+      <table id="holdings">
+        <thead>
+          <tr>
+            <th scope="col" class="left"><button type="button" data-sort="asset">Coin</button></th>
+            <th scope="col"><button type="button" data-sort="balance">Số lượng</button></th>
+            <th scope="col"><button type="button" data-sort="avg">Giá TB</button></th>
+            <th scope="col"><button type="button" data-sort="price">Giá hiện tại</button></th>
+            <th scope="col"><button type="button" data-sort="unrealizedPct" title="Giá hiện tại so với giá trung bình">So với TB</button></th>
+            <th scope="col" class="opt"><button type="button" data-sort="costHeld">Vốn</button></th>
+            <th scope="col"><button type="button" data-sort="value">Giá trị</button></th>
+            <th scope="col"><button type="button" data-sort="unrealized">Lãi/lỗ</button></th>
+            <th scope="col"><button type="button" data-sort="realized">Đã chốt</button></th>
+            <th scope="col" class="opt"><button type="button" data-sort="alloc">Tỷ trọng</button></th>
+          </tr>
+        </thead>
+        <tbody id="holdings-body"></tbody>
+      </table>
+      <div id="empty" class="empty" hidden>
+        <p id="empty-text"></p>
+        <button id="empty-sync" class="btn primary" type="button">Đồng bộ</button>
+      </div>
+    </section>
+    <p class="footnote">Giá vốn: bình quân gia quyền từ lệnh Spot, quy về USDT, đã gồm phí. Đơn vị: USDT. Bấm một dòng để xem từng lệnh.</p>
+  </div>
+</div>
+
+<!-- Chi tiết coin -->
+<dialog id="detail" aria-labelledby="detail-title">
+  <header class="dialog-head">
+    <h2 id="detail-title"></h2>
+    <button class="btn ghost" type="button" data-close>Đóng</button>
+  </header>
+  <div class="dialog-body">
+    <dl id="detail-stats" class="detail-stats"></dl>
+    <ul id="detail-notes" class="notes"></ul>
+    <figure id="detail-chart" class="chart" hidden></figure>
+    <table id="history">
+      <thead>
+        <tr>
+          <th scope="col" class="left">Thời gian</th>
+          <th scope="col" class="left">Cặp</th>
+          <th scope="col" class="left">Loại</th>
+          <th scope="col" title="Giá quy về USDT, đã gồm phí">Giá sau phí</th>
+          <th scope="col">Lượng</th>
+          <th scope="col">Phí</th>
+          <th scope="col">Giá TB sau lệnh</th>
+        </tr>
+      </thead>
+      <tbody id="history-body"></tbody>
+    </table>
+  </div>
+</dialog>
+
+<!-- Cài đặt -->
+<dialog id="settings" aria-labelledby="settings-title">
+  <header class="dialog-head">
+    <h2 id="settings-title">Cài đặt</h2>
+    <button class="btn ghost" type="button" data-close>Đóng</button>
+  </header>
+  <div class="dialog-body settings">
+    <section>
+      <h3>API key</h3>
+      <p class="row"><code id="key-masked"></code>
+        <button id="key-change" class="btn small" type="button">Đổi key</button>
+        <button id="key-remove" class="btn small danger" type="button">Xóa key</button></p>
+    </section>
+
+    <section>
+      <h3>Quét lịch sử</h3>
+      <p class="muted">Đồng bộ thường chỉ quét các coin đang có số dư. Coin đã bán hết cần quét toàn bộ, hoặc thêm tay bên dưới.</p>
+      <p class="row"><button id="scan-full" class="btn small" type="button">Quét toàn bộ</button></p>
+      <form id="extra-form" class="row">
+        <input id="extra-asset" placeholder="Thêm coin, ví dụ DOGE" aria-label="Thêm coin để quét" autocomplete="off" spellcheck="false">
+        <button class="btn small" type="submit">Thêm</button>
+      </form>
+      <p id="extra-error" class="field-error" role="alert" hidden></p>
+      <ul id="extra-list" class="chips"></ul>
+      <p class="muted">Cặp đã bị Binance hủy niêm yết có thể không lấy lại được lệnh. Coin mua qua các cặp đó sẽ hiện là “không rõ giá vốn”.</p>
+    </section>
+
+    <section>
+      <h3>Dữ liệu</h3>
+      <p class="row">
+        <button id="export-sqlite" class="btn small" type="button">Xuất .sqlite</button>
+        <button id="export-csv" class="btn small" type="button">Xuất CSV</button>
+        <button id="wipe" class="btn small danger" type="button">Xóa toàn bộ dữ liệu</button>
+      </p>
+      <p class="muted">Dữ liệu lưu trong trình duyệt trên máy này. File xuất ra không chứa API key.</p>
+    </section>
+  </div>
+</dialog>
+
+<!-- Hỏi xác nhận -->
+<dialog id="confirm" aria-labelledby="confirm-text">
+  <form method="dialog" class="confirm">
+    <p id="confirm-text"></p>
+    <div class="row end">
+      <button class="btn" value="cancel">Hủy</button>
+      <button id="confirm-ok" class="btn primary" value="ok"></button>
+    </div>
+  </form>
+</dialog>
+
 <script type="module" src="dashboard.js"></script>
+</body>
 </html>
