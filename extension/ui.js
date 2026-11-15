@@ -100,23 +100,21 @@ function holdingRow(r, colors) {
   return h('tr', { tabindex: '0', 'data-asset': r.asset, 'aria-label': `Xem lệnh ${r.asset}` }, [
     h('td', { class: 'left' }, coin),
     h('td', { class: held ? '' : 'zero' }, fmtQty(r.balance)),
-    h('td', {}, r.avg == null ? dash() : fmtPrice(r.avg)),
-    h('td', { class: tick }, r.price == null ? dash() : fmtPrice(r.price)),
+    h('td', {}, [
+      h('span', { class: 'muted' }, r.avg == null ? '—' : fmtPrice(r.avg)),
+      h('span', { class: 'arrow', 'aria-hidden': 'true' }, '→'),
+      h('span', { class: 'now ' + tick }, r.price == null ? '—' : fmtPrice(r.price)),
+    ]),
+    h('td', {}, held && r.value != null ? fmtUsd(r.value) : dash()),
+    h('td', { class: 'pnl ' + tone(r.unrealized) }, hasPnl ? fmtSignedUsd(r.unrealized) : dash()),
     h('td', {}, hasPnl ? h('span', { class: 'pill ' + tone(r.unrealized) }, fmtPct(r.unrealizedPct)) : dash()),
-    h('td', { class: 'opt' }, r.costHeld > 0 ? fmtUsd(r.costHeld) : dash()),
-    h('td', { class: 'strong' }, held && r.value != null ? fmtUsd(r.value) : dash()),
-    h('td', { class: tone(r.unrealized) }, hasPnl ? fmtSignedUsd(r.unrealized) : dash()),
-    h('td', { class: tone(r.realized) }, flat(r.realized) ? dash() : fmtSignedUsd(r.realized)),
-    h('td', { class: 'opt' }, r.alloc == null ? dash() : h('span', { class: 'weight' }, [
-      `${r.alloc.toFixed(1)}%`, h('i', { style: `--w:${r.alloc}%;--c:${color}` }),
-    ])),
   ]);
 }
 
-function setStat(id, text, n) {
+function setStat(id, text, n, base = 'num') {
   const el = $(id);
   el.textContent = text;
-  el.className = 'num big ' + tone(n);
+  el.className = base + ' ' + tone(n);
 }
 
 export function render(state) {
@@ -158,11 +156,10 @@ export function render(state) {
   }
 
   const s = state.summary;
-  setStat('stat-cost', fmtUsd(s.costHeld));
   setStat('stat-value', fmtUsd(s.value));
-  setStat('stat-unrealized', fmtSignedUsd(s.unrealized), s.unrealized);
-  $('stat-unrealized-pct').textContent = s.unrealizedPct == null ? 'USDT' : `USDT · ${fmtPct(s.unrealizedPct)}`;
-  $('stat-unrealized-pct').className = 'unit ' + tone(s.unrealized);
+  setStat('stat-unrealized', fmtSignedUsd(s.unrealized), s.unrealized, 'num hero-pnl');
+  setStat('stat-unrealized-pct', fmtPct(s.unrealizedPct), s.unrealized, 'pill big');
+  setStat('stat-cost', fmtUsd(s.costHeld));
   setStat('stat-realized', fmtSignedUsd(s.realized), s.realized);
   setStat('stat-total', fmtSignedUsd(s.unrealized + s.realized), s.unrealized + s.realized);
 

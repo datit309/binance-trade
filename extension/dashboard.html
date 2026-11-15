@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark light">
+  <meta name="color-scheme" content="dark">
   <title>Giá vốn Spot</title>
   <link rel="icon" href="icons/48.png">
   <link rel="stylesheet" href="dashboard.css">
@@ -80,14 +80,16 @@
       <p id="progress-text" aria-live="polite"></p>
     </section>
 
-    <section class="panel" aria-label="Tổng quan">
-      <div class="kpis">
-        <div class="kpi"><h2>Vốn đang giữ</h2><p id="stat-cost" class="num big"></p><p class="unit">USDT</p></div>
-        <div class="kpi"><h2>Giá trị hiện tại</h2><p id="stat-value" class="num big"></p><p class="unit">USDT</p></div>
-        <div class="kpi"><h2>Lãi/lỗ chưa chốt</h2><p id="stat-unrealized" class="num big"></p><p id="stat-unrealized-pct" class="unit"></p></div>
-        <div class="kpi"><h2>Lãi/lỗ đã chốt</h2><p id="stat-realized" class="num big"></p><p class="unit">USDT</p></div>
-        <div class="kpi"><h2>Tổng lãi/lỗ</h2><p id="stat-total" class="num big"></p><p class="unit">USDT · chưa chốt + đã chốt</p></div>
-      </div>
+    <section class="hero" aria-label="Tổng quan">
+      <p class="hero-total">Tổng tài sản Spot <b id="stat-value" class="num"></b> USDT</p>
+      <p class="hero-caption">Lãi/lỗ chưa chốt</p>
+      <p id="stat-unrealized" class="num hero-pnl"></p>
+      <p><span id="stat-unrealized-pct" class="pill big"></span></p>
+      <dl class="hero-sub">
+        <div><dt>Vốn đang giữ</dt><dd id="stat-cost" class="num"></dd></div>
+        <div><dt>Đã chốt</dt><dd id="stat-realized" class="num"></dd></div>
+        <div><dt>Tổng lãi/lỗ</dt><dd id="stat-total" class="num"></dd></div>
+      </dl>
       <div id="alloc" class="alloc" hidden>
         <div id="alloc-bar" class="alloc-bar" role="img" aria-label="Tỷ trọng danh mục"></div>
         <ul id="alloc-legend" class="alloc-legend"></ul>
@@ -106,14 +108,10 @@
           <tr>
             <th scope="col" class="left"><button type="button" data-sort="asset">Coin</button></th>
             <th scope="col"><button type="button" data-sort="balance">Số lượng</button></th>
-            <th scope="col"><button type="button" data-sort="avg">Giá TB</button></th>
-            <th scope="col"><button type="button" data-sort="price">Giá hiện tại</button></th>
-            <th scope="col"><button type="button" data-sort="unrealizedPct" title="Giá hiện tại so với giá trung bình">So với TB</button></th>
-            <th scope="col" class="opt"><button type="button" data-sort="costHeld">Vốn</button></th>
+            <th scope="col"><button type="button" data-sort="price">Giá TB → hiện tại</button></th>
             <th scope="col"><button type="button" data-sort="value">Giá trị</button></th>
             <th scope="col"><button type="button" data-sort="unrealized">Lãi/lỗ</button></th>
-            <th scope="col"><button type="button" data-sort="realized">Đã chốt</button></th>
-            <th scope="col" class="opt"><button type="button" data-sort="alloc">Tỷ trọng</button></th>
+            <th scope="col"><button type="button" data-sort="unrealizedPct">%</button></th>
           </tr>
         </thead>
         <tbody id="holdings-body"></tbody>
