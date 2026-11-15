@@ -5,7 +5,7 @@ import { createClient } from './binance.js';
 import { pickSymbols, estimateMinutes, syncTrades, syncPrices, makePriceAt, toTrade } from './sync.js';
 import { tradesToCsv, download } from './export.js';
 import { openTicker } from './live.js';
-import { render, showDetail, renderSettings, askConfirm } from './ui.js';
+import { render, renderSettings, askConfirm } from './ui.js';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -18,6 +18,7 @@ const state = {
   lastSyncedAt: null,
   error: null, retry: null,
   live: false,
+  focus: null, // asset shown on its own, or null for the whole portfolio
   keyWarning: false, keyError: null, keyBusy: false, hasKey: false,
   hideSmall: true, query: '', sort: { key: 'value', dir: 'desc' },
   apiKey: '', extraAssets: [], extraError: null,
@@ -249,9 +250,18 @@ async function wipe() {
 
 // ---------- events ----------
 
+function setFocus(asset) {
+  state.focus = asset;
+  update();
+  window.scrollTo({ top: 0 });
+  if (asset) $('focus-back').focus();
+  else document.querySelector(`#holdings-body tr[data-asset="${CSS.escape(lastFocus ?? '')}"]`)?.focus();
+  lastFocus = asset ?? lastFocus;
+}
+let lastFocus = null;
+
 function openDetail(tr) {
-  const row = state.rows.find((r) => r.asset === tr.dataset.asset);
-  if (row) showDetail(row, state.positions[row.asset]);
+  setFocus(tr.dataset.asset);
 }
 
 function wire() {
@@ -260,6 +270,10 @@ function wire() {
     saveKey($('api-key').value.trim(), $('api-secret').value.trim());
   });
   $('key-cancel').addEventListener('click', () => { state.screen = 'main'; state.keyError = null; update(); });
+  $('focus-back').addEventListener('click', () => setFocus(null));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && state.focus && !document.querySelector('dialog[open]')) setFocus(null);
+  });
   $('locked-retry').addEventListener('click', () => location.reload());
 
   $('btn-sync').addEventListener('click', () => {

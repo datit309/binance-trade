@@ -155,16 +155,42 @@ export function render(state) {
       : `Đang lấy lệnh ${symbol ?? ''} (${fmtQty(done)}/${fmtQty(total)}) · ${fmtQty(newTrades)} lệnh mới`;
   }
 
-  const s = state.summary;
-  setStat('stat-value', fmtUsd(s.value));
-  setStat('stat-unrealized', fmtSignedUsd(s.unrealized), s.unrealized, 'num hero-pnl');
-  setStat('stat-unrealized-pct', fmtPct(s.unrealizedPct), s.unrealized, 'pill big');
-  setStat('stat-cost', fmtUsd(s.costHeld));
-  setStat('stat-realized', fmtSignedUsd(s.realized), s.realized);
-  setStat('stat-total', fmtSignedUsd(s.unrealized + s.realized), s.unrealized + s.realized);
-
+  const focus = state.focus ? state.rows.find((r) => r.asset === state.focus) : null;
   const allocation = allocate(state.rows);
-  renderAlloc(allocation);
+  $('focus-back').hidden = !focus;
+  $('focus').hidden = !focus;
+  $('overview').hidden = Boolean(focus);
+  const label = (texts) => texts.forEach((t, i) => { $('lbl-' + (i + 1)).textContent = t; });
+
+  if (focus) {
+    // One coin only: the hero, chart and trade list all describe this coin.
+    const hasPnl = focus.unrealized != null && focus.knownQty > 0;
+    $('hero-title').textContent = `${focus.asset} · ${fmtQty(focus.balance)} ·`;
+    setStat('stat-value', focus.balance > 0 ? fmtUsd(focus.value) : '—');
+    $('hero-caption').textContent = `Lãi/lỗ chưa chốt · ${focus.asset}`;
+    setStat('stat-unrealized', hasPnl ? fmtSignedUsd(focus.unrealized) : '—', hasPnl ? focus.unrealized : null, 'num hero-pnl');
+    setStat('stat-unrealized-pct', hasPnl ? fmtPct(focus.unrealizedPct) : '—', hasPnl ? focus.unrealized : null, 'pill big');
+    label(['Giá trung bình', 'Giá hiện tại', 'Vốn đang giữ', 'Đã chốt']);
+    setStat('stat-cost', fmtPrice(focus.avg));
+    setStat('stat-realized', fmtPrice(focus.price));
+    setStat('stat-total', focus.costHeld > 0 ? fmtUsd(focus.costHeld) : '—');
+    setStat('stat-extra', fmtSignedUsd(focus.realized), focus.realized);
+    $('alloc').hidden = true;
+    renderFocus(focus, state.positions[focus.asset]);
+  } else {
+    const s = state.summary;
+    $('hero-title').textContent = 'Tổng tài sản Spot';
+    setStat('stat-value', fmtUsd(s.value));
+    $('hero-caption').textContent = 'Lãi/lỗ chưa chốt';
+    setStat('stat-unrealized', fmtSignedUsd(s.unrealized), s.unrealized, 'num hero-pnl');
+    setStat('stat-unrealized-pct', fmtPct(s.unrealizedPct), s.unrealized, 'pill big');
+    label(['Vốn đang giữ', 'Đã chốt', 'Tổng lãi/lỗ', 'Số coin']);
+    setStat('stat-cost', fmtUsd(s.costHeld));
+    setStat('stat-realized', fmtSignedUsd(s.realized), s.realized);
+    setStat('stat-total', fmtSignedUsd(s.unrealized + s.realized), s.unrealized + s.realized);
+    setStat('stat-extra', String(state.rows.filter((r) => r.balance > 0).length));
+    renderAlloc(allocation);
+  }
 
   $('search').value = state.query;
   $('hide-small').checked = state.hideSmall;
@@ -256,21 +282,9 @@ function priceChart(history, currentPrice) {
   ])];
 }
 
-export function showDetail(row, position) {
-  $('detail-title').textContent = `${row.asset} · lịch sử lệnh Spot`;
-  const hasPnl = row.unrealized != null && row.knownQty > 0;
-  const stat = (label, value, n) => h('div', {}, [h('dt', {}, label), h('dd', { class: tone(n) }, value)]);
-  $('detail-stats').replaceChildren(
-    stat('Số lượng', fmtQty(row.balance)),
-    stat('Giá trung bình', fmtPrice(row.avg)),
-    stat('Giá hiện tại', fmtPrice(row.price)),
-    stat('So với giá TB', hasPnl ? fmtPct(row.unrealizedPct) : '—', hasPnl ? row.unrealized : null),
-    stat('Vốn đang giữ', row.costHeld > 0 ? fmtUsd(row.costHeld) : '—'),
-    stat('Giá trị', row.balance > 0 ? fmtUsd(row.value) : '—'),
-    stat('Lãi/lỗ chưa chốt', hasPnl ? fmtSignedUsd(row.unrealized) : '—', hasPnl ? row.unrealized : null),
-    stat('Lãi/lỗ đã chốt', fmtSignedUsd(row.realized), row.realized),
-  );
+let historyKey = ''; // skip rebuilding the trade list on price-only repaints
 
+function renderFocus(row, position) {
   const notes = row.warn.map((w) => h('li', {}, EXPLAIN[w](row)));
   if (movedOut(row)) {
     notes.push(h('li', { class: 'plain' },
@@ -283,6 +297,9 @@ export function showDetail(row, position) {
   $('detail-chart').hidden = !chart;
   $('detail-chart').replaceChildren(...(chart ?? []));
 
+  const key = row.asset + ':' + chronological.length;
+  if (key === historyKey) return;
+  historyKey = key;
   const history = [...chronological].reverse();
   $('history-body').replaceChildren(...(history.length
     ? history.map((x) => h('tr', {}, [
@@ -295,9 +312,6 @@ export function showDetail(row, position) {
         h('td', {}, x.qtyAfter > 0 ? fmtPrice(x.avgAfter) : '—'),
       ]))
     : [h('tr', {}, h('td', { class: 'left muted', colspan: '7' }, 'Chưa có lệnh Spot nào cho coin này.'))]));
-
-  $('detail').showModal();
-  $('detail').querySelector('.dialog-body').scrollTop = 0;
 }
 
 export function renderSettings({ apiKeyMasked, extraAssets, extraError, demo }) {

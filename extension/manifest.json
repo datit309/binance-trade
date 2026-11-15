@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Giá vốn Spot",
+  "name": "Quản lý vốn",
   "description": "Tính giá vốn trung bình và lãi/lỗ các coin Binance Spot từ lịch sử lệnh. Dữ liệu lưu trên máy.",
   "version": "0.1.0",
-  "action": { "default_title": "Mở Giá vốn Spot" },
+  "action": { "default_title": "Mở Quản lý vốn" },
   "background": { "service_worker": "background.js" },
   "permissions": ["storage", "unlimitedStorage"],
   "host_permissions": ["https://api.binance.com/*"],

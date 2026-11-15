@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>Giá vốn Spot</title>
+  <title>Quản lý vốn</title>
   <link rel="icon" href="icons/48.png">
   <link rel="stylesheet" href="dashboard.css">
 </head>
@@ -14,7 +14,7 @@
 <main id="screen-setup" class="center-screen" hidden>
   <form id="key-form" class="card setup" novalidate>
     <img src="icons/128.png" alt="" width="48" height="48">
-    <h1>Giá vốn Spot</h1>
+    <h1>Quản lý vốn</h1>
     <p class="lead">Kết nối tài khoản Binance để xem giá vốn trung bình và lãi/lỗ từng coin bạn đang giữ.</p>
 
     <ol class="steps">
@@ -50,7 +50,7 @@
   <header class="topbar">
     <div class="topbar-inner">
       <img src="icons/48.png" alt="" width="28" height="28">
-      <h1>Giá vốn Spot</h1>
+      <h1>Quản lý vốn</h1>
       <span id="live-status" class="mono muted" role="status"></span>
       <span id="sync-status" class="muted"></span>
       <button id="btn-sync" class="btn primary" type="button">Đồng bộ</button>
@@ -81,14 +81,16 @@
     </section>
 
     <section class="hero" aria-label="Tổng quan">
-      <p class="hero-total">Tổng tài sản Spot <b id="stat-value" class="num"></b> USDT</p>
-      <p class="hero-caption">Lãi/lỗ chưa chốt</p>
+      <button id="focus-back" class="btn small" type="button" hidden>← Tất cả coin</button>
+      <p class="hero-total"><span id="hero-title"></span> <b id="stat-value" class="num"></b> USDT</p>
+      <p id="hero-caption" class="hero-caption"></p>
       <p id="stat-unrealized" class="num hero-pnl"></p>
       <p><span id="stat-unrealized-pct" class="pill big"></span></p>
       <dl class="hero-sub">
-        <div><dt>Vốn đang giữ</dt><dd id="stat-cost" class="num"></dd></div>
-        <div><dt>Đã chốt</dt><dd id="stat-realized" class="num"></dd></div>
-        <div><dt>Tổng lãi/lỗ</dt><dd id="stat-total" class="num"></dd></div>
+        <div><dt id="lbl-1"></dt><dd id="stat-cost" class="num"></dd></div>
+        <div><dt id="lbl-2"></dt><dd id="stat-realized" class="num"></dd></div>
+        <div><dt id="lbl-3"></dt><dd id="stat-total" class="num"></dd></div>
+        <div><dt id="lbl-4"></dt><dd id="stat-extra" class="num"></dd></div>
       </dl>
       <div id="alloc" class="alloc" hidden>
         <div id="alloc-bar" class="alloc-bar" role="img" aria-label="Tỷ trọng danh mục"></div>
@@ -96,6 +98,28 @@
       </div>
     </section>
 
+    <section id="focus" class="focus" hidden>
+      <ul id="detail-notes" class="notes"></ul>
+      <figure id="detail-chart" class="chart" hidden></figure>
+      <div class="panel table-card">
+        <table id="history">
+          <thead>
+            <tr>
+              <th scope="col" class="left">Thời gian</th>
+              <th scope="col" class="left">Cặp</th>
+              <th scope="col" class="left">Loại</th>
+              <th scope="col" title="Giá quy về USDT, đã gồm phí">Giá sau phí</th>
+              <th scope="col">Lượng</th>
+              <th scope="col">Phí</th>
+              <th scope="col">Giá TB sau lệnh</th>
+            </tr>
+          </thead>
+          <tbody id="history-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <div id="overview" class="overview">
     <div class="toolbar">
       <input id="search" type="search" placeholder="Tìm coin…" aria-label="Tìm coin" autocomplete="off">
       <span id="row-count"></span>
@@ -121,36 +145,10 @@
         <button id="empty-sync" class="btn primary" type="button">Đồng bộ</button>
       </div>
     </section>
-    <p class="footnote">Giá vốn: bình quân gia quyền từ lệnh Spot, quy về USDT, đã gồm phí. Đơn vị: USDT. Bấm một dòng để xem từng lệnh.</p>
+    <p class="footnote">Giá vốn: bình quân gia quyền từ lệnh Spot, quy về USDT, đã gồm phí. Đơn vị: USDT. Bấm một coin để xem riêng coin đó.</p>
+    </div>
   </div>
 </div>
-
-<!-- Chi tiết coin -->
-<dialog id="detail" aria-labelledby="detail-title">
-  <header class="dialog-head">
-    <h2 id="detail-title"></h2>
-    <button class="btn ghost" type="button" data-close>Đóng</button>
-  </header>
-  <div class="dialog-body">
-    <dl id="detail-stats" class="detail-stats"></dl>
-    <ul id="detail-notes" class="notes"></ul>
-    <figure id="detail-chart" class="chart" hidden></figure>
-    <table id="history">
-      <thead>
-        <tr>
-          <th scope="col" class="left">Thời gian</th>
-          <th scope="col" class="left">Cặp</th>
-          <th scope="col" class="left">Loại</th>
-          <th scope="col" title="Giá quy về USDT, đã gồm phí">Giá sau phí</th>
-          <th scope="col">Lượng</th>
-          <th scope="col">Phí</th>
-          <th scope="col">Giá TB sau lệnh</th>
-        </tr>
-      </thead>
-      <tbody id="history-body"></tbody>
-    </table>
-  </div>
-</dialog>
 
 <!-- Cài đặt -->
 <dialog id="settings" aria-labelledby="settings-title">
