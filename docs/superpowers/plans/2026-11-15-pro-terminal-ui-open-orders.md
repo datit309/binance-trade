@@ -165,6 +165,8 @@ git commit -m "feat: add accountBalances and read-only openOrders to binance cli
 **Interfaces:**
 - Consumes: `STABLES` từ `./cost.js`
 - Produces:
+  - `parseSymbolPair(symbol, exchangeMap)`
+  - `sortNullLast(a, b, key, dir)`
   - `buildOpenOrders(rawOrders, exchangeSymbols, tickers) -> OpenOrder[]`
   - `summarizeOpenOrders(orders) -> { totalCount, buyCount, sellCount, buyValueUsdt, sellValueUsdt, totalLockedUsdt, byAsset }`
   - `visibleOrders(orders, { query, side, typeFilter, sort }) -> OpenOrder[]`
@@ -396,7 +398,7 @@ export function summarizeOpenOrders(orders) {
 
 const isStopOrder = (o) => o.isOco || (o.type && o.type.includes('STOP')) || (o.type && o.type.includes('TAKE_PROFIT'));
 
-const SORT_NULL_LAST = (a, b, key, dir) => {
+export const sortNullLast = (a, b, key, dir) => {
   const x = a[key];
   const y = b[key];
   if (x == null && y == null) return 0;
@@ -412,7 +414,7 @@ export function visibleOrders(orders, { query = '', side = 'ALL', typeFilter = '
     .filter((o) => !q || o.symbol.includes(q) || o.base.includes(q))
     .filter((o) => side === 'ALL' || o.side === side)
     .filter((o) => typeFilter === 'ALL' || (typeFilter === 'STOP' ? isStopOrder(o) : !isStopOrder(o)))
-    .sort((a, b) => SORT_NULL_LAST(a, b, sort.key, sort.dir));
+    .sort((a, b) => sortNullLast(a, b, sort.key, sort.dir));
 }
 ```
 
@@ -1753,7 +1755,7 @@ git commit -m "feat: redesign dashboard HTML and Obsidian Pro Terminal CSS"
 **Interfaces:**
 - Consumes:
   - `createClient` (`accountBalances`, `openOrders`) từ `./binance.js`
-  - `buildOpenOrders`, `summarizeOpenOrders`, `visibleOrders` từ `./orders.js`
+  - `buildOpenOrders`, `summarizeOpenOrders`, `visibleOrders`, `sortNullLast` từ `./orders.js`
   - `renderPriceChart` từ `./chart.js`
   - `buildRows`, `summarize` từ `./portfolio.js`
   - `fmtUsd`, `fmtSignedUsd`, `fmtPrice`, `fmtQty`, `fmtPct`, `fmtTime`, `fmtClock` từ `./format.js`
@@ -1806,6 +1808,7 @@ Expected: FAIL vì `visibleRows` chưa lọc theo `holdingsFilter`.
 // DOM rendering only. State and behaviour live in dashboard.js.
 import { fmtUsd, fmtSignedUsd, fmtPrice, fmtQty, fmtPct, fmtTime, fmtClock } from './format.js';
 import { renderPriceChart } from './chart.js';
+import { sortNullLast } from './orders.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -1837,16 +1840,6 @@ const EXPLAIN = {
 };
 const SIDE = { BUY: 'Mua', SELL: 'Bán', FEE: 'Phí' };
 
-const SORT_NULL_LAST = (a, b, key, dir) => {
-  const x = a[key];
-  const y = b[key];
-  if (x == null && y == null) return 0;
-  if (x == null) return 1;
-  if (y == null) return -1;
-  const cmp = typeof x === 'string' ? x.localeCompare(y) : x - y;
-  return dir === 'asc' ? cmp : -cmp;
-};
-
 export function visibleRows(state) {
   const q = state.query.trim().toUpperCase();
   const byAsset = state.ordersSummary?.byAsset ?? {};
@@ -1858,7 +1851,7 @@ export function visibleRows(state) {
       if (state.holdingsFilter === 'orders') return (byAsset[r.asset]?.length ?? 0) > 0;
       return true;
     })
-    .sort((a, b) => SORT_NULL_LAST(a, b, state.sort.key, state.sort.dir));
+    .sort((a, b) => sortNullLast(a, b, state.sort.key, state.sort.dir));
 }
 
 const PALETTE = ['#e5a93c', '#38bdf8', '#16c784', '#a78bfa', '#fb923c', '#2dd4bf', '#f472b6'];
