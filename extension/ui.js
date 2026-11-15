@@ -1,9 +1,10 @@
 // DOM rendering only. State and behaviour live in dashboard.js.
 import { fmtUsd, fmtSignedUsd, fmtPrice, fmtQty, fmtPct, fmtTime, fmtClock } from './format.js';
+import { renderPriceChart } from './chart.js';
+import { sortNullLast } from './orders.js';
 
 const $ = (id) => document.getElementById(id);
 
-/** h('td', { class: 'left' }, 'text' | Node | [..]) — text is always set via textContent, never as HTML. */
 function h(tag, props = {}, children = []) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) {
@@ -16,12 +17,13 @@ function h(tag, props = {}, children = []) {
 }
 
 const tone = (n) => (n == null || Math.abs(n) < 0.005 ? '' : n > 0 ? 'up' : 'down');
+const dash = () => h('span', { class: 'zero' }, '—');
 
 const BADGES = {
-  unknown: (r) => `${fmtQty(r.unknownQty)} không rõ giá vốn`,
+  unknown: (r) => `${fmtQty(r.unknownQty)} chưa rõ vốn`,
   oversold: () => 'Thiếu lịch sử mua',
-  unpriced: () => 'Có lệnh không quy đổi được',
-  noprice: () => 'Không có giá USDT',
+  unpriced: () => 'Không quy đổi được',
+  noprice: () => 'Thiếu giá USDT',
 };
 const EXPLAIN = {
   unknown: (r) => `${fmtQty(r.unknownQty)} ${r.asset} trong ví không có lệnh mua Spot tương ứng (nạp từ ngoài, Convert, Earn, P2P…). Giá trung bình chỉ tính trên phần mua qua Spot.`,
@@ -31,29 +33,23 @@ const EXPLAIN = {
 };
 const SIDE = { BUY: 'Mua', SELL: 'Bán', FEE: 'Phí' };
 
-const SORT_NULL_LAST = (a, b, key, dir) => {
-  const x = a[key];
-  const y = b[key];
-  if (x == null && y == null) return 0;
-  if (x == null) return 1;
-  if (y == null) return -1;
-  const cmp = typeof x === 'string' ? x.localeCompare(y) : x - y;
-  return dir === 'asc' ? cmp : -cmp;
-};
-
 export function visibleRows(state) {
   const q = state.query.trim().toUpperCase();
+  const byAsset = state.ordersSummary?.byAsset ?? {};
   return state.rows
     .filter((r) => !q || r.asset.includes(q))
-    // "Small" means worth under 1 USDT. A coin with no price but a balance is never hidden.
     .filter((r) => !state.hideSmall || (r.value ?? (r.balance > 0 ? Infinity : 0)) >= 1)
-    .sort((a, b) => SORT_NULL_LAST(a, b, state.sort.key, state.sort.dir));
+    .filter((r) => {
+      if (state.holdingsFilter === 'warn') return r.warn.length > 0;
+      if (state.holdingsFilter === 'orders') return (byAsset[r.asset]?.length ?? 0) > 0;
+      return true;
+    })
+    .sort((a, b) => sortNullLast(a, b, state.sort.key, state.sort.dir));
 }
 
-const PALETTE = ['#f0b90b', '#4084ff', '#0ecb81', '#b083f0', '#ff8f40', '#39c5cf', '#f778ba'];
-const OTHER = '#5b6470';
+const PALETTE = ['#e5a93c', '#38bdf8', '#16c784', '#a78bfa', '#fb923c', '#2dd4bf', '#f472b6'];
+const OTHER = '#526075';
 
-/** Sets r.alloc (% of portfolio value) on every row and returns asset -> colour for the largest holdings. */
 function allocate(rows) {
   const total = rows.reduce((sum, r) => sum + (r.value ?? 0), 0);
   for (const r of rows) r.alloc = total > 0 && r.value > 0 ? (r.value / total) * 100 : null;
@@ -66,58 +62,214 @@ function renderAlloc({ ranked, colors }) {
   $('alloc').hidden = ranked.length === 0;
   const top = ranked.filter((r) => colors.has(r.asset));
   const rest = ranked.filter((r) => !colors.has(r.asset)).reduce((sum, r) => sum + r.alloc, 0);
-  const parts = top.map((r) => ({ name: r.asset, pct: r.alloc, color: colors.get(r.asset) }));
-  if (rest > 0) parts.push({ name: 'Khác', pct: rest, color: OTHER });
+  const parts = top.map((r) => ({ name: r.asset, pct: r.alloc, color: colors.get(r.asset), clickable: true }));
+  if (rest > 0) parts.push({ name: 'Khác', pct: rest, color: OTHER, clickable: false });
   $('alloc-bar').replaceChildren(...parts.map((p) =>
     h('i', { style: `width:${p.pct}%;background:${p.color}`, title: `${p.name} ${p.pct.toFixed(1)}%` })));
   $('alloc-legend').replaceChildren(...parts.map((p) => h('li', {}, [
-    h('span', { class: 'dot', style: `background:${p.color}` }), h('b', {}, p.name), `${p.pct.toFixed(1)}%`,
+    p.clickable
+      ? h('button', { type: 'button', 'data-drawer-asset': p.name }, [
+          h('span', { class: 'dot', style: `background:${p.color}` }), h('b', {}, p.name), `${p.pct.toFixed(1)}%`,
+        ])
+      : h('span', { class: 'legend-static' }, [
+          h('span', { class: 'dot', style: `background:${p.color}` }), h('b', {}, p.name), `${p.pct.toFixed(1)}%`,
+        ]),
   ])));
 }
 
-// Sub-1-USDT gaps are float/fee dust, not a real transfer out.
 const movedOut = (r) => r.balance > 0 && r.movedOutQty * (r.price ?? 1) >= 1;
-const dash = () => h('span', { class: 'zero' }, '—');
-const flat = (n) => n == null || Math.abs(n) < 0.005;
+const lastPrice = new Map();
+let historyKey = '';
+let chartKey = '';
 
-const lastPrice = new Map(); // asset -> price at previous render, for the tick flash
+function avatarStyle(color) {
+  return `background:${color}22;border-color:${color}55;color:${color}`;
+}
 
-function holdingRow(r, colors) {
+function pct24h(price, open) {
+  if (price == null || open == null || open <= 0) return null;
+  return ((price - open) / open) * 100;
+}
+
+function holdingRow(r, state, colors) {
   const prev = lastPrice.get(r.asset);
   const tick = prev == null || r.price == null || prev === r.price ? '' : r.price > prev ? 'tick-up' : 'tick-down';
   const color = colors.get(r.asset) ?? OTHER;
+  const locked = state.balancesDetail?.locked?.[r.asset] ?? 0;
+  const orderCount = state.ordersSummary?.byAsset?.[r.asset]?.length ?? 0;
+  const chg = pct24h(r.price, state.open24h?.[r.asset + 'USDT']);
+
   const coin = h('div', { class: 'coin' }, [
-    h('span', { class: 'dot', style: `background:${r.alloc == null ? 'transparent' : color}` }),
-    h('b', {}, r.asset),
-    ...r.warn.map((w) => h('span', { class: 'tag', title: EXPLAIN[w](r) }, BADGES[w](r))),
-    movedOut(r)
-      ? h('span', { class: 'tag plain', title: 'Đã rút hoặc chuyển sang Earn/Funding. Giá trung bình không đổi.' }, `chuyển ra ${fmtQty(r.movedOutQty)}`)
-      : null,
+    h('span', { class: 'avatar', style: avatarStyle(color) }, r.asset.slice(0, 3)),
+    h('div', { class: 'coin-meta' }, [
+      h('b', {}, r.asset),
+      orderCount > 0 ? h('span', { class: 'tag ord' }, `${orderCount} lệnh chờ`) : null,
+      ...r.warn.map((w) => h('span', { class: 'tag', title: EXPLAIN[w](r) }, BADGES[w](r))),
+      movedOut(r)
+        ? h('span', { class: 'tag plain', title: 'Đã rút hoặc chuyển sang Earn/Funding. Giá trung bình không đổi.' }, `chuyển ra ${fmtQty(r.movedOutQty)}`)
+        : null,
+    ]),
   ]);
   const hasPnl = r.unrealized != null && r.knownQty > 0;
   const held = r.balance > 0;
 
-  return h('tr', { tabindex: '0', 'data-asset': r.asset, 'aria-label': `Xem lệnh ${r.asset}` }, [
+  return h('tr', { tabindex: '0', 'data-asset': r.asset, 'aria-label': `Xem chi tiết ${r.asset}` }, [
     h('td', { class: 'left' }, coin),
-    h('td', { class: held ? '' : 'zero' }, fmtQty(r.balance)),
-    h('td', {}, [
-      h('span', { class: 'muted' }, r.avg == null ? '—' : fmtPrice(r.avg)),
-      h('span', { class: 'arrow', 'aria-hidden': 'true' }, '→'),
-      h('span', { class: 'now ' + tick }, r.price == null ? '—' : fmtPrice(r.price)),
+    h('td', { class: held ? '' : 'zero' }, [
+      h('div', { class: 'cell-stack' }, [
+        h('span', {}, fmtQty(r.balance)),
+        locked > 0 ? h('span', { class: 'cell-sub lock' }, `Khóa: ${fmtQty(locked)}`) : null,
+      ]),
     ]),
-    h('td', {}, held && r.value != null ? fmtUsd(r.value) : dash()),
-    h('td', { class: 'pnl ' + tone(r.unrealized) }, hasPnl ? fmtSignedUsd(r.unrealized) : dash()),
+    h('td', {}, [
+      h('div', { class: 'cell-stack' }, [
+        h('div', { class: 'price-line' }, [
+          h('span', { class: 'muted' }, r.avg == null ? '—' : fmtPrice(r.avg)),
+          h('span', { class: 'arrow', 'aria-hidden': 'true' }, '→'),
+          h('span', { class: 'now ' + tick }, r.price == null ? '—' : fmtPrice(r.price)),
+        ]),
+        chg != null ? h('span', { class: 'chg-badge ' + tone(chg) }, `24h ${fmtPct(chg)}`) : null,
+      ]),
+    ]),
+    h('td', {}, held && r.value != null ? h('div', { class: 'cell-stack' }, [
+      h('span', {}, fmtUsd(r.value)),
+      r.alloc != null ? h('span', { class: 'cell-sub' }, `${r.alloc.toFixed(1)}%`) : null,
+    ]) : dash()),
+    h('td', { class: tone(r.unrealized) }, hasPnl ? fmtSignedUsd(r.unrealized) : dash()),
     h('td', {}, hasPnl ? h('span', { class: 'pill ' + tone(r.unrealized) }, fmtPct(r.unrealizedPct)) : dash()),
   ]);
 }
 
-function setStat(id, text, n, base = 'num') {
-  const el = $(id);
-  el.textContent = text;
-  el.className = base + ' ' + tone(n);
+function orderRow(o) {
+  const statusLabel = o.status === 'PARTIALLY_FILLED' ? 'Khớp một phần' : 'Chờ khớp';
+  return h('tr', { tabindex: '0', 'data-order-asset': o.base, 'aria-label': `Xem coin ${o.base}` }, [
+    h('td', { class: 'left' }, fmtTime(o.time)),
+    h('td', { class: 'left' }, [
+      h('div', { class: 'cell-stack left' }, [
+        h('span', {}, `${o.base}/${o.quote || '—'}`),
+        h('div', { class: 'coin-meta' }, [
+          h('span', { class: 'tag plain' }, o.type),
+          o.isOco ? h('span', { class: 'tag oco' }, 'OCO') : null,
+        ]),
+      ]),
+    ]),
+    h('td', { class: 'left' }, h('span', { class: `side-badge ${o.side}` }, o.side === 'BUY' ? 'MUA' : 'BÁN')),
+    h('td', {}, h('div', { class: 'cell-stack' }, [
+      h('span', {}, o.price > 0 ? fmtPrice(o.price) : 'MARKET'),
+      o.stopPrice != null ? h('span', { class: 'cell-sub' }, `Kích hoạt: ${fmtPrice(o.stopPrice)}`) : null,
+    ])),
+    h('td', {}, h('div', { class: 'cell-stack' }, [
+      h('span', { class: o.distancePct == null ? 'zero' : tone(o.distancePct) }, o.distancePct == null ? '—' : fmtPct(o.distancePct)),
+      o.marketPrice != null ? h('span', { class: 'cell-sub' }, `TT: ${fmtPrice(o.marketPrice)}`) : null,
+    ])),
+    h('td', {}, h('div', { class: 'cell-stack' }, [
+      h('span', {}, `${fmtQty(o.executedQty)} / ${fmtQty(o.origQty)}`),
+      h('div', { class: 'fill-track', title: `${o.fillPct.toFixed(1)}%` }, h('span', { class: 'fill-bar', style: `width:${o.fillPct}%` })),
+    ])),
+    h('td', {}, o.remainingValueUsdt != null ? `${fmtUsd(o.remainingValueUsdt)} USDT` : dash()),
+    h('td', { class: 'left' }, h('span', { class: o.status === 'PARTIALLY_FILLED' ? 'status-tag partial' : 'status-tag' }, statusLabel)),
+  ]);
 }
 
-export function render(state) {
+function setStat(id, text, n, base = 'kpi-val num') {
+  const el = $(id);
+  el.textContent = text;
+  el.className = base + (n == null ? '' : ' ' + tone(n));
+}
+
+function renderDrawer(state, colors) {
+  const asset = state.drawerAsset;
+  const open = Boolean(asset);
+  $('drawer-backdrop').hidden = !open;
+  $('drawer').hidden = !open;
+  if (!open) return;
+
+  const row = state.rows.find((r) => r.asset === asset) ?? {
+    asset,
+    balance: state.balancesDetail?.total?.[asset] ?? 0,
+    avg: null,
+    price: state.tickers?.[asset + 'USDT'] ?? null,
+    value: null,
+    knownQty: 0,
+    costHeld: 0,
+    unrealized: null,
+    unrealizedPct: null,
+    realized: 0,
+    unknownQty: 0,
+    movedOutQty: 0,
+    warn: [],
+  };
+  const pos = state.positions[asset];
+  const color = colors.get(asset) ?? OTHER;
+  const free = state.balancesDetail?.free?.[asset] ?? row.balance;
+  const locked = state.balancesDetail?.locked?.[asset] ?? 0;
+  const chg = pct24h(row.price, state.open24h?.[asset + 'USDT']);
+  const coinOrders = state.ordersSummary?.byAsset?.[asset] ?? [];
+
+  $('drawer-avatar').textContent = asset.slice(0, 3);
+  $('drawer-avatar').setAttribute('style', avatarStyle(color));
+  $('drawer-title').textContent = asset;
+  $('drawer-price').textContent = row.price != null ? `${fmtPrice(row.price)} USDT` : '—';
+  $('drawer-change24h').hidden = chg == null;
+  if (chg != null) {
+    $('drawer-change24h').textContent = `24h ${fmtPct(chg)}`;
+    $('drawer-change24h').className = 'chg-badge num ' + tone(chg);
+  }
+  $('drawer-balance-sub').textContent = `Tổng: ${fmtQty(row.balance)} · Khả dụng: ${fmtQty(free)} · Khóa lệnh: ${fmtQty(locked)}`;
+
+  $('drawer-avg').textContent = fmtPrice(row.avg);
+  $('drawer-now').textContent = fmtPrice(row.price);
+  $('drawer-cost').textContent = row.costHeld > 0 ? `${fmtUsd(row.costHeld)} USDT` : '—';
+  $('drawer-realized').textContent = fmtSignedUsd(row.realized);
+  $('drawer-realized').className = 'num ' + tone(row.realized);
+
+  const notes = row.warn.map((w) => h('li', {}, EXPLAIN[w](row)));
+  if (movedOut(row)) {
+    notes.push(h('li', { class: 'plain' }, `Đã chuyển ${fmtQty(row.movedOutQty)} ${asset} ra khỏi ví Spot (rút, Earn, Funding). Giá trung bình không đổi.`));
+  }
+  $('drawer-notes').replaceChildren(...notes);
+
+  const chronological = pos?.history ?? [];
+  const nextChartKey = `${asset}:${chronological.length}:${row.price ?? ''}:${coinOrders.map((o) => `${o.orderId}@${o.price}`).join(',')}`;
+  if (nextChartKey !== chartKey && !$('drawer-chart').matches(':hover')) {
+    chartKey = nextChartKey;
+    const chart = renderPriceChart({ history: chronological, currentPrice: row.price, openOrders: coinOrders });
+    $('drawer-chart').hidden = !chart;
+    $('drawer-chart').replaceChildren(...(chart ?? []));
+  }
+
+  $('drawer-orders-section').hidden = coinOrders.length === 0;
+  $('drawer-orders-body').replaceChildren(...coinOrders.map((o) => h('tr', {}, [
+    h('td', { class: 'left' }, [
+      h('span', { class: `side-badge ${o.side}` }, o.side === 'BUY' ? 'MUA' : 'BÁN'),
+      ' ',
+      o.symbol,
+    ]),
+    h('td', {}, o.price > 0 ? fmtPrice(o.price) : 'MARKET'),
+    h('td', { class: o.distancePct == null ? 'zero' : tone(o.distancePct) }, o.distancePct == null ? '—' : fmtPct(o.distancePct)),
+    h('td', {}, `${fmtQty(o.executedQty)} / ${fmtQty(o.origQty)}`),
+    h('td', {}, o.remainingValueUsdt != null ? `${fmtUsd(o.remainingValueUsdt)} USDT` : dash()),
+  ])));
+
+  const nextHistoryKey = `${asset}:${chronological.length}`;
+  if (nextHistoryKey !== historyKey) {
+    historyKey = nextHistoryKey;
+    const history = [...chronological].reverse();
+    $('drawer-history-body').replaceChildren(...(history.length
+      ? history.map((x) => h('tr', {}, [
+          h('td', { class: 'left' }, fmtTime(x.time)),
+          h('td', { class: 'left' }, x.symbol),
+          h('td', { class: 'left side-' + x.side }, SIDE[x.side]),
+          h('td', {}, fmtPrice(x.price)),
+          h('td', {}, fmtQty(x.qty)),
+          h('td', { class: 'muted' }, x.fee > 0 ? `${fmtQty(x.fee)} ${x.feeAsset}` : '—'),
+          h('td', {}, x.qtyAfter > 0 ? fmtPrice(x.avgAfter) : '—'),
+        ]))
+      : [h('tr', {}, h('td', { class: 'left muted', colspan: '7' }, 'Chưa có lịch sử khớp lệnh Spot cho coin này.'))]));
+  }
+}
+
+export function render(state, visibleOrdersFn) {
   for (const s of ['setup', 'locked', 'main']) $('screen-' + s).hidden = state.screen !== s;
   if (state.screen === 'setup') {
     $('key-error').textContent = state.keyError ?? '';
@@ -125,15 +277,16 @@ export function render(state) {
     $('key-submit').disabled = state.keyBusy;
     $('key-submit').textContent = state.keyBusy ? 'Đang kiểm tra key…' : 'Lưu và đồng bộ';
     $('key-cancel').hidden = !state.hasKey;
+    return;
   }
   if (state.screen !== 'main') return;
 
   const syncing = state.sync != null;
   $('sync-status').textContent = syncing ? 'Đang đồng bộ'
     : state.lastSyncedAt ? `Đồng bộ lúc ${fmtClock(state.lastSyncedAt)}` : 'Chưa đồng bộ';
-  $('sync-status').className = 'muted mono ' + (syncing ? 'busy' : state.lastSyncedAt ? '' : 'stale');
-  $('live-status').textContent = state.live ? 'Giá trực tiếp' : 'Giá chưa trực tiếp';
-  $('live-status').className = 'mono ' + (state.live ? 'on' : 'muted');
+  $('live-status').textContent = state.live ? 'Trực tiếp' : 'Ngoại tuyến';
+  $('live-status').className = 'status-pill ' + (state.live ? 'on' : '');
+  $('btn-refresh').disabled = state.demo || syncing || state.refreshing;
   $('btn-sync').textContent = syncing ? 'Dừng' : 'Đồng bộ';
   $('btn-sync').classList.toggle('primary', !syncing);
   $('btn-sync').disabled = state.demo || (syncing && state.sync.stopping);
@@ -155,163 +308,107 @@ export function render(state) {
       : `Đang lấy lệnh ${symbol ?? ''} (${fmtQty(done)}/${fmtQty(total)}) · ${fmtQty(newTrades)} lệnh mới`;
   }
 
-  const focus = state.focus ? state.rows.find((r) => r.asset === state.focus) : null;
+  const s = state.summary;
+  const os = state.ordersSummary;
   const allocation = allocate(state.rows);
-  $('focus-back').hidden = !focus;
-  $('focus').hidden = !focus;
-  $('overview').hidden = Boolean(focus);
-  const label = (texts) => texts.forEach((t, i) => { $('lbl-' + (i + 1)).textContent = t; });
+  renderAlloc(allocation);
 
-  if (focus) {
-    // One coin only: the hero, chart and trade list all describe this coin.
-    const hasPnl = focus.unrealized != null && focus.knownQty > 0;
-    $('hero-title').textContent = `${focus.asset} · ${fmtQty(focus.balance)} ·`;
-    setStat('stat-value', focus.balance > 0 ? fmtUsd(focus.value) : '—');
-    $('hero-caption').textContent = `Lãi/lỗ chưa chốt · ${focus.asset}`;
-    setStat('stat-unrealized', hasPnl ? fmtSignedUsd(focus.unrealized) : '—', hasPnl ? focus.unrealized : null, 'num hero-pnl');
-    setStat('stat-unrealized-pct', hasPnl ? fmtPct(focus.unrealizedPct) : '—', hasPnl ? focus.unrealized : null, 'pill big');
-    label(['Giá trung bình', 'Giá hiện tại', 'Vốn đang giữ', 'Đã chốt']);
-    setStat('stat-cost', fmtPrice(focus.avg));
-    setStat('stat-realized', fmtPrice(focus.price));
-    setStat('stat-total', focus.costHeld > 0 ? fmtUsd(focus.costHeld) : '—');
-    setStat('stat-extra', fmtSignedUsd(focus.realized), focus.realized);
-    $('alloc').hidden = true;
-    renderFocus(focus, state.positions[focus.asset]);
-  } else {
-    const s = state.summary;
-    $('hero-title').textContent = 'Tổng tài sản Spot';
-    setStat('stat-value', fmtUsd(s.value));
-    $('hero-caption').textContent = 'Lãi/lỗ chưa chốt';
-    setStat('stat-unrealized', fmtSignedUsd(s.unrealized), s.unrealized, 'num hero-pnl');
-    setStat('stat-unrealized-pct', fmtPct(s.unrealizedPct), s.unrealized, 'pill big');
-    label(['Vốn đang giữ', 'Đã chốt', 'Tổng lãi/lỗ', 'Số coin']);
-    setStat('stat-cost', fmtUsd(s.costHeld));
-    setStat('stat-realized', fmtSignedUsd(s.realized), s.realized);
-    setStat('stat-total', fmtSignedUsd(s.unrealized + s.realized), s.unrealized + s.realized);
-    setStat('stat-extra', String(state.rows.filter((r) => r.balance > 0).length));
-    renderAlloc(allocation);
-  }
+  setStat('kpi-value', `${fmtUsd(s.value)} USDT`, null);
+  const lockedCount = Object.values(state.balancesDetail?.locked ?? {}).filter((v) => v > 0).length;
+  $('kpi-value-sub').textContent = lockedCount > 0
+    ? `${state.rows.filter((r) => r.balance > 0).length} coin · ${lockedCount} coin đang khóa lệnh`
+    : `${state.rows.filter((r) => r.balance > 0).length} coin đang nắm giữ`;
+  setStat('kpi-unrealized', fmtSignedUsd(s.unrealized), s.unrealized);
+  $('kpi-unrealized-pct').textContent = fmtPct(s.unrealizedPct);
+  $('kpi-unrealized-pct').className = 'pill ' + tone(s.unrealized);
+  setStat('kpi-cost', `${fmtUsd(s.costHeld)} USDT`, null);
+  const unknownRows = state.rows.filter((r) => r.warn.includes('unknown')).length;
+  $('kpi-cost-sub').textContent = unknownRows > 0
+    ? `${unknownRows} coin có phần chưa rõ nguồn vốn`
+    : 'Giá vốn bình quân gia quyền';
+  setStat('kpi-realized', fmtSignedUsd(s.realized), s.realized);
+  const net = s.unrealized + s.realized;
+  $('kpi-net-sub').textContent = `Tổng ròng: ${fmtSignedUsd(net)} USDT`;
+  $('kpi-net-sub').className = 'kpi-sub num ' + tone(net);
 
+  $('kpi-orders').textContent = state.ordersError ? 'Lỗi tải' : `${os.totalCount} lệnh`;
+  $('kpi-orders-sub').textContent = state.ordersError
+    ? 'Bấm để thử tải lại'
+    : `${os.buyCount} Mua · ${os.sellCount} Bán · ≈ ${fmtUsd(os.totalLockedUsdt)} USDT`;
+
+  // Workspace tabs
+  $('tab-holdings').classList.toggle('active', state.tab === 'holdings');
+  $('tab-holdings').setAttribute('aria-selected', String(state.tab === 'holdings'));
+  $('tab-orders').classList.toggle('active', state.tab === 'orders');
+  $('tab-orders').setAttribute('aria-selected', String(state.tab === 'orders'));
+  $('panel-holdings').hidden = state.tab !== 'holdings';
+  $('panel-orders').hidden = state.tab !== 'orders';
+
+  const visibleHoldings = visibleRows(state);
+  $('tab-holdings-count').textContent = String(state.rows.length);
+  $('tab-orders-count').textContent = String(os.totalCount);
+  $('tab-orders-dot').hidden = os.totalCount === 0;
+
+  // Holdings table
   $('search').value = state.query;
   $('hide-small').checked = state.hideSmall;
+  for (const btn of $('holdings-filters').querySelectorAll('button')) {
+    btn.classList.toggle('active', btn.dataset.hfilter === state.holdingsFilter);
+  }
   for (const th of document.querySelectorAll('#holdings thead th')) {
     const key = th.querySelector('button').dataset.sort;
     if (key === state.sort.key) th.setAttribute('aria-sort', state.sort.dir === 'asc' ? 'ascending' : 'descending');
     else th.removeAttribute('aria-sort');
   }
-
-  const rows = visibleRows(state);
-  $('row-count').textContent = state.rows.length ? `${rows.length}/${state.rows.length} coin` : '';
-  const focused = document.activeElement?.closest?.('#holdings-body tr')?.dataset.asset;
-  $('holdings-body').replaceChildren(...rows.map((r) => holdingRow(r, allocation.colors)));
+  $('row-count').textContent = state.rows.length ? `${visibleHoldings.length}/${state.rows.length} coin` : '';
+  const focusedHolding = document.activeElement?.closest?.('#holdings-body tr')?.dataset.asset;
+  $('holdings-body').replaceChildren(...visibleHoldings.map((r) => holdingRow(r, state, allocation.colors)));
   for (const r of state.rows) lastPrice.set(r.asset, r.price);
-  // Live repaints rebuild the rows; keep keyboard focus where it was.
-  if (focused) $('holdings-body').querySelector(`tr[data-asset="${CSS.escape(focused)}"]`)?.focus();
-  $('holdings').hidden = rows.length === 0;
-  $('empty').hidden = rows.length > 0;
+  if (focusedHolding) $('holdings-body').querySelector(`tr[data-asset="${CSS.escape(focusedHolding)}"]`)?.focus();
+  $('holdings').hidden = visibleHoldings.length === 0;
+  $('empty').hidden = visibleHoldings.length > 0;
   const noData = state.rows.length === 0;
   $('empty-text').textContent = noData
     ? 'Chưa có lệnh nào. Bấm Đồng bộ để lấy lịch sử từ Binance.'
-    : 'Không có coin nào khớp.';
+    : 'Không có coin nào khớp bộ lọc hiện tại.';
   $('empty-sync').hidden = !noData || syncing || state.demo;
-}
 
-// ---------- coin detail ----------
+  // Open Orders table
+  $('orders-summary-buy').textContent = `${os.buyCount} lệnh (≈ ${fmtUsd(os.buyValueUsdt)} USDT)`;
+  $('orders-summary-sell').textContent = `${os.sellCount} lệnh (≈ ${fmtUsd(os.sellValueUsdt)} USDT)`;
+  $('orders-error').hidden = !state.ordersError;
+  $('orders-error-text').textContent = state.ordersError ?? '';
 
-const SVG_NS = 'http://www.w3.org/2000/svg';
-function s(tag, attrs = {}, text) {
-  const el = document.createElementNS(SVG_NS, tag);
-  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
-  if (text != null) el.textContent = text;
-  return el;
-}
-
-/** Fills against the average-cost line: where each buy/sell landed relative to cost basis and the current price. */
-function priceChart(history, currentPrice) {
-  const fills = history.filter((x) => x.side !== 'FEE' && x.qty > 0);
-  if (fills.length < 2) return null;
-
-  const W = 840, H = 210, L = 64, R = 14, T = 10, B = 22;
-  const times = fills.map((x) => x.time);
-  const t0 = Math.min(...times);
-  const t1 = Math.max(...times, t0 + 1);
-  const values = [...fills.map((x) => x.price), ...history.filter((x) => x.qtyAfter > 0).map((x) => x.avgAfter)];
-  if (currentPrice != null) values.push(currentPrice);
-  let lo = Math.min(...values), hi = Math.max(...values);
-  const padY = (hi - lo || hi || 1) * 0.08;
-  lo -= padY; hi += padY;
-  const x = (t) => L + ((t - t0) / (t1 - t0)) * (W - L - R);
-  const y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
-
-  const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Giá các lệnh mua bán so với giá trung bình' });
-  for (const f of [0, 0.5, 1]) {
-    const v = lo + padY + (hi - lo - 2 * padY) * f;
-    svg.append(s('line', { class: 'grid', x1: L, x2: W - R, y1: y(v), y2: y(v) }),
-      s('text', { x: L - 8, y: y(v) + 3, 'text-anchor': 'end' }, fmtPrice(v)));
+  $('order-search').value = state.orderQuery;
+  for (const btn of $('order-side-filters').querySelectorAll('button')) {
+    btn.classList.toggle('active', btn.dataset.oside === state.orderSide);
   }
-  svg.append(s('text', { x: L, y: H - 6 }, fmtTime(t0).slice(0, 10)),
-    s('text', { x: W - R, y: H - 6, 'text-anchor': 'end' }, fmtTime(t1).slice(0, 10)));
-
-  if (currentPrice != null) {
-    svg.append(s('line', { class: 'now', x1: L, x2: W - R, y1: y(currentPrice), y2: y(currentPrice) }));
+  for (const btn of $('order-type-filters').querySelectorAll('button')) {
+    btn.classList.toggle('active', btn.dataset.otype === state.orderType);
+  }
+  for (const th of document.querySelectorAll('#open-orders thead th')) {
+    const key = th.querySelector('button').dataset.osort;
+    if (key === state.orderSort.key) th.setAttribute('aria-sort', state.orderSort.dir === 'asc' ? 'ascending' : 'descending');
+    else th.removeAttribute('aria-sort');
   }
 
-  // Average cost as a step line; it breaks whenever the position is fully closed.
-  let d = '';
-  let open = false;
-  for (const p of history) {
-    if (p.qtyAfter <= 0) { open = false; continue; }
-    const px = x(Math.min(Math.max(p.time, t0), t1)).toFixed(1);
-    const py = y(p.avgAfter).toFixed(1);
-    d += open ? `H${px}V${py}` : `M${px},${py}`;
-    open = true;
-  }
-  if (open) d += `H${W - R}`;
-  if (d) svg.append(s('path', { class: 'avg', d }));
+  const filteredOrders = visibleOrdersFn(state.openOrders, {
+    query: state.orderQuery,
+    side: state.orderSide,
+    typeFilter: state.orderType,
+    sort: state.orderSort,
+  });
+  $('order-count').textContent = state.openOrders.length ? `${filteredOrders.length}/${state.openOrders.length} lệnh` : '';
+  $('open-orders-body').replaceChildren(...filteredOrders.map(orderRow));
+  $('open-orders').hidden = filteredOrders.length === 0;
+  $('orders-empty').hidden = filteredOrders.length > 0;
+  $('orders-empty-text').textContent = state.ordersError
+    ? 'Không tải được danh sách lệnh chờ khớp.'
+    : state.openOrders.length === 0
+      ? 'Hiện không có lệnh Spot nào đang chờ khớp.'
+      : 'Không có lệnh chờ nào khớp bộ lọc hiện tại.';
 
-  for (const f of fills) {
-    const dot = s('circle', { class: f.side === 'BUY' ? 'buy' : 'sell', cx: x(f.time).toFixed(1), cy: y(f.price).toFixed(1), r: 3.5 });
-    dot.append(s('title', {}, `${SIDE[f.side]} ${fmtQty(f.qty)} @ ${fmtPrice(f.price)} · ${fmtTime(f.time)}`));
-    svg.append(dot);
-  }
-
-  const key = (cls, label) => h('span', {}, [h('i', { class: 'key ' + cls }), label]);
-  return [svg, h('figcaption', {}, [
-    key('', 'Giá trung bình'), key('buy', 'Mua'), key('sell', 'Bán'),
-    currentPrice != null ? key('now', `Giá hiện tại ${fmtPrice(currentPrice)}`) : null,
-  ])];
-}
-
-let historyKey = ''; // skip rebuilding the trade list on price-only repaints
-
-function renderFocus(row, position) {
-  const notes = row.warn.map((w) => h('li', {}, EXPLAIN[w](row)));
-  if (movedOut(row)) {
-    notes.push(h('li', { class: 'plain' },
-      `Đã chuyển ${fmtQty(row.movedOutQty)} ${row.asset} ra khỏi ví Spot (rút, Earn, Funding). Giá trung bình không đổi.`));
-  }
-  $('detail-notes').replaceChildren(...notes);
-
-  const chronological = position?.history ?? [];
-  const chart = priceChart(chronological, row.price);
-  $('detail-chart').hidden = !chart;
-  $('detail-chart').replaceChildren(...(chart ?? []));
-
-  const key = row.asset + ':' + chronological.length;
-  if (key === historyKey) return;
-  historyKey = key;
-  const history = [...chronological].reverse();
-  $('history-body').replaceChildren(...(history.length
-    ? history.map((x) => h('tr', {}, [
-        h('td', { class: 'left' }, fmtTime(x.time)),
-        h('td', { class: 'left' }, x.symbol),
-        h('td', { class: 'left side-' + x.side }, SIDE[x.side]),
-        h('td', {}, fmtPrice(x.price)),
-        h('td', {}, fmtQty(x.qty)),
-        h('td', { class: 'muted' }, x.fee > 0 ? `${fmtQty(x.fee)} ${x.feeAsset}` : '—'),
-        h('td', {}, x.qtyAfter > 0 ? fmtPrice(x.avgAfter) : '—'),
-      ]))
-    : [h('tr', {}, h('td', { class: 'left muted', colspan: '7' }, 'Chưa có lệnh Spot nào cho coin này.'))]));
+  renderDrawer(state, allocation.colors);
 }
 
 export function renderSettings({ apiKeyMasked, extraAssets, extraError, demo }) {
@@ -324,12 +421,11 @@ export function renderSettings({ apiKeyMasked, extraAssets, extraError, demo }) 
   $('extra-form').querySelector('button').disabled = demo;
 }
 
-/** Promise<boolean>. Native <dialog>, so Esc cancels and focus is trapped for free. */
 export function askConfirm(text, okLabel, { danger = false } = {}) {
   const dlg = $('confirm');
   $('confirm-text').textContent = text;
   $('confirm-ok').textContent = okLabel;
-  $('confirm-ok').className = 'btn ' + (danger ? 'danger' : 'primary');
+  $('confirm-ok').className = 'btn small ' + (danger ? 'danger' : 'primary');
   dlg.returnValue = 'cancel';
   dlg.showModal();
   return new Promise((resolve) => {

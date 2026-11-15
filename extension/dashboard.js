@@ -1,8 +1,9 @@
-// Page controller: owns state, wires events, runs sync. Rendering is in ui.js; logic modules are pure.
+// Page controller: owns state, wires events, runs sync and live refresh.
 import { computePositions } from './cost.js';
 import { buildRows, summarize } from './portfolio.js';
 import { createClient } from './binance.js';
 import { pickSymbols, estimateMinutes, syncTrades, syncPrices, makePriceAt, toTrade } from './sync.js';
+import { buildOpenOrders, summarizeOpenOrders, visibleOrders } from './orders.js';
 import { tradesToCsv, download } from './export.js';
 import { openTicker } from './live.js';
 import { render, renderSettings, askConfirm } from './ui.js';
@@ -13,29 +14,54 @@ const params = new URLSearchParams(location.search);
 const state = {
   screen: 'main',
   demo: params.has('demo'),
-  rows: [], summary: summarize([]), positions: {},
-  sync: null, // { phase, done, total, symbol, newTrades, stopping }
+  tab: 'holdings',
+  rows: [],
+  summary: summarize([]),
+  positions: {},
+  balancesDetail: null,
+  tickers: {},
+  open24h: {},
+  rawOpenOrders: [],
+  openOrders: [],
+  ordersSummary: summarizeOpenOrders([]),
+  ordersError: null,
+  sync: null,
+  refreshing: false,
   lastSyncedAt: null,
-  error: null, retry: null,
+  error: null,
+  retry: null,
   live: false,
-  focus: null, // asset shown on its own, or null for the whole portfolio
-  keyWarning: false, keyError: null, keyBusy: false, hasKey: false,
-  hideSmall: true, query: '', sort: { key: 'value', dir: 'desc' },
-  apiKey: '', extraAssets: [], extraError: null,
+  drawerAsset: null,
+  keyWarning: false,
+  keyError: null,
+  keyBusy: false,
+  hasKey: false,
+  hideSmall: true,
+  holdingsFilter: 'all',
+  query: '',
+  sort: { key: 'value', dir: 'desc' },
+  orderQuery: '',
+  orderSide: 'ALL',
+  orderType: 'ALL',
+  orderSort: { key: 'time', dir: 'desc' },
+  apiKey: '',
+  extraAssets: [],
+  extraError: null,
 };
 
 let db = null;
 let api = null;
-let exchange = null; // [{symbol, base, quote}], cached for the session
+let exchange = null;
 let balances = null;
 let tickers = null;
 let abort = null;
-let ticker = null; // live price socket
+let ticker = null;
 let tickerKey = '';
 let repaintQueued = false;
+let lastFocusEl = null;
 const store = globalThis.chrome?.storage?.local;
 
-const update = () => render(state);
+const update = () => render(state, visibleOrders);
 
 function setError(e, retry = null) {
   console.error(e);
@@ -45,21 +71,30 @@ function setError(e, retry = null) {
 
 function recompute(tradeRows, priceRows) {
   state.positions = computePositions(tradeRows.map(toTrade), makePriceAt(priceRows));
-  rebuildRows();
+  rebuildViews();
   watchPrices();
 }
 
-function rebuildRows() {
-  // Without live balances (offline), fall back to what the trade history says is held.
+function rebuildViews() {
   const held = balances ?? Object.fromEntries(
-    Object.values(state.positions).filter((p) => p.qty > 0).map((p) => [p.asset, p.qty]));
-  state.rows = buildRows(state.positions, held, tickers ?? {});
+    Object.values(state.positions).filter((p) => p.qty > 0).map((p) => [p.asset, p.qty]),
+  );
+  state.tickers = tickers ?? {};
+  state.rows = buildRows(state.positions, held, state.tickers);
   state.summary = summarize(state.rows);
+  state.openOrders = buildOpenOrders(state.rawOpenOrders, exchange ?? [], state.tickers);
+  state.ordersSummary = summarizeOpenOrders(state.openOrders);
 }
 
-/** Streams prices for the coins actually held; reconnects only when that set changes. */
 function watchPrices() {
-  const symbols = state.rows.filter((r) => r.balance > 0 && r.price != null).map((r) => r.asset + 'USDT').sort();
+  const set = new Set(
+    state.rows.filter((r) => r.balance > 0 && r.price != null).map((r) => r.asset + 'USDT'),
+  );
+  for (const o of state.openOrders) {
+    set.add(o.symbol);
+    if (o.quote && (tickers?.[o.quote + 'USDT'] != null)) set.add(o.quote + 'USDT');
+  }
+  const symbols = [...set].sort();
   const key = symbols.join(',');
   if (key === tickerKey) return;
   tickerKey = key;
@@ -67,12 +102,12 @@ function watchPrices() {
   ticker = openTicker({
     symbols,
     onStatus: (connected) => { state.live = connected; update(); },
-    onPrice: (symbol, price) => {
+    onPrice: (symbol, price, openPrice) => {
       tickers[symbol] = price;
+      if (Number.isFinite(openPrice) && openPrice > 0) state.open24h[symbol] = openPrice;
       if (repaintQueued) return;
       repaintQueued = true;
-      // Ticks arrive per symbol; repaint at most twice a second.
-      setTimeout(() => { repaintQueued = false; rebuildRows(); update(); }, 500);
+      setTimeout(() => { repaintQueued = false; rebuildViews(); update(); }, 500);
     },
   });
 }
@@ -84,20 +119,43 @@ function stopPrices() {
   state.live = false;
 }
 
-async function refresh() {
-  const [tradeRows, priceRows] = await Promise.all([db.allTrades(), db.getPrices()]);
-  try {
-    [balances, tickers] = await Promise.all([api.account(), api.tickerPrices()]);
-  } catch (e) {
-    setError(e, refresh);
-  }
-  recompute(tradeRows, priceRows);
-  update();
-}
-
 async function getExchange() {
   exchange ??= await api.exchangeInfo();
   return exchange;
+}
+
+async function refreshOpenOrdersOnly() {
+  state.ordersError = null;
+  try {
+    const [raw] = await Promise.all([api.openOrders(), getExchange().catch(() => [])]);
+    state.rawOpenOrders = raw;
+  } catch (e) {
+    console.error(e);
+    state.ordersError = e?.kind ? e.message : `Không tải được lệnh chờ: ${e?.message ?? e}`;
+  }
+}
+
+async function refresh() {
+  if (state.refreshing) return;
+  state.refreshing = true;
+  update();
+
+  const [tradeRows, priceRows] = await Promise.all([db.allTrades(), db.getPrices()]);
+  try {
+    const [balDetail, latestTickers] = await Promise.all([api.accountBalances(), api.tickerPrices()]);
+    state.balancesDetail = balDetail;
+    balances = balDetail.total;
+    tickers = latestTickers;
+    state.error = null;
+    state.retry = null;
+    await refreshOpenOrdersOnly();
+  } catch (e) {
+    setError(e, refresh);
+  } finally {
+    state.refreshing = false;
+  }
+  recompute(tradeRows, priceRows);
+  update();
 }
 
 async function runSync(full) {
@@ -123,7 +181,6 @@ async function runSync(full) {
       extraAssets: state.extraAssets,
       full,
     });
-    // A full scan skips pairs checked in the last hour, so restarting an interrupted one resumes.
     const skipSyncedSince = full ? Date.now() - 3_600_000 : Infinity;
     await syncTrades({ api, db, symbols, onProgress, signal, skipSyncedSince });
     if (!signal.aborted) {
@@ -156,7 +213,7 @@ async function saveKey(apiKey, secret) {
 
   const candidate = createClient({ apiKey, secret });
   try {
-    await candidate.account(); // proves the key works before anything is stored
+    await candidate.account();
   } catch (e) {
     state.keyBusy = false;
     state.keyError = e.kind ? e.message : `Có lỗi xảy ra: ${e.message}`;
@@ -178,6 +235,8 @@ async function saveKey(apiKey, secret) {
     apiKey, hasKey: true, keyBusy: false, keyWarning: risky, screen: 'main', error: null,
   });
   $('key-form').reset();
+  $('api-secret').type = 'password';
+  $('toggle-secret').textContent = 'Hiện';
   update();
   await runSync(false);
 }
@@ -190,6 +249,11 @@ async function removeKey() {
   api = null;
   stopPrices();
   balances = tickers = null;
+  state.balancesDetail = null;
+  state.rawOpenOrders = [];
+  state.openOrders = [];
+  state.ordersSummary = summarizeOpenOrders([]);
+  state.drawerAsset = null;
   Object.assign(state, { apiKey: '', hasKey: false, keyWarning: false, screen: 'setup', keyError: null });
   $('settings').close();
   update();
@@ -199,7 +263,9 @@ async function removeKey() {
 
 const settingsView = () => renderSettings({
   apiKeyMasked: state.apiKey ? '••••••••' + state.apiKey.slice(-4) : 'Dữ liệu mẫu',
-  extraAssets: state.extraAssets, extraError: state.extraError, demo: state.demo,
+  extraAssets: state.extraAssets,
+  extraError: state.extraError,
+  demo: state.demo,
 });
 
 async function scanFull() {
@@ -207,7 +273,8 @@ async function scanFull() {
     const n = (await getExchange()).length;
     const ok = await askConfirm(
       `Quét toàn bộ ${n.toLocaleString('en-US')} cặp trên Binance, mất khoảng ${estimateMinutes(n)} phút. ` +
-      'Giữ tab này mở trong lúc quét. Nếu bị ngắt, bấm Quét toàn bộ lại trong vòng 1 giờ để chạy tiếp từ chỗ dừng.', 'Quét toàn bộ');
+      'Giữ tab này mở trong lúc quét. Nếu bị ngắt, bấm Quét toàn bộ lại trong vòng 1 giờ để chạy tiếp từ chỗ dừng.', 'Quét toàn bộ',
+    );
     if (!ok) return;
     $('settings').close();
     await runSync(true);
@@ -239,7 +306,8 @@ async function addExtra(raw) {
 async function wipe() {
   const ok = await askConfirm(
     'Xóa toàn bộ lịch sử lệnh đã lưu trên máy này? API key được giữ lại. Bạn có thể đồng bộ lại từ Binance bất cứ lúc nào.',
-    'Xóa dữ liệu', { danger: true });
+    'Xóa dữ liệu', { danger: true },
+  );
   if (!ok) return;
   await db.wipe();
   await store.remove('lastSyncedAt');
@@ -248,34 +316,45 @@ async function wipe() {
   await refresh();
 }
 
-// ---------- events ----------
+// ---------- drawer & navigation ----------
 
-function setFocus(asset) {
-  state.focus = asset;
+function openDrawer(asset, triggerEl = document.activeElement) {
+  lastFocusEl = triggerEl;
+  state.drawerAsset = asset;
   update();
-  window.scrollTo({ top: 0 });
-  if (asset) $('focus-back').focus();
-  else document.querySelector(`#holdings-body tr[data-asset="${CSS.escape(lastFocus ?? '')}"]`)?.focus();
-  lastFocus = asset ?? lastFocus;
+  $('drawer').focus();
 }
-let lastFocus = null;
 
-function openDetail(tr) {
-  setFocus(tr.dataset.asset);
+function closeDrawer() {
+  if (!state.drawerAsset) return;
+  state.drawerAsset = null;
+  update();
+  lastFocusEl?.focus?.();
+  lastFocusEl = null;
 }
+
+function setTab(tab) {
+  state.tab = tab;
+  update();
+}
+
+// ---------- events ----------
 
 function wire() {
   $('key-form').addEventListener('submit', (e) => {
     e.preventDefault();
     saveKey($('api-key').value.trim(), $('api-secret').value.trim());
   });
-  $('key-cancel').addEventListener('click', () => { state.screen = 'main'; state.keyError = null; update(); });
-  $('focus-back').addEventListener('click', () => setFocus(null));
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && state.focus && !document.querySelector('dialog[open]')) setFocus(null);
+  $('toggle-secret').addEventListener('click', () => {
+    const input = $('api-secret');
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    $('toggle-secret').textContent = show ? 'Ẩn' : 'Hiện';
   });
+  $('key-cancel').addEventListener('click', () => { state.screen = 'main'; state.keyError = null; update(); });
   $('locked-retry').addEventListener('click', () => location.reload());
 
+  $('btn-refresh').addEventListener('click', refresh);
   $('btn-sync').addEventListener('click', () => {
     if (state.sync) {
       state.sync.stopping = true;
@@ -292,6 +371,29 @@ function wire() {
     update();
     retry?.();
   });
+  $('orders-retry').addEventListener('click', async () => {
+    await refreshOpenOrdersOnly();
+    rebuildViews();
+    update();
+  });
+
+  $('kpi-orders-card').addEventListener('click', () => setTab('orders'));
+  $('tab-holdings').addEventListener('click', () => setTab('holdings'));
+  $('tab-orders').addEventListener('click', () => setTab('orders'));
+
+  $('alloc-legend').addEventListener('click', (e) => {
+    const asset = e.target.closest('[data-drawer-asset]')?.dataset.drawerAsset;
+    if (asset) openDrawer(asset, e.target.closest('button'));
+  });
+
+  $('drawer-close').addEventListener('click', closeDrawer);
+  $('drawer-backdrop').addEventListener('click', closeDrawer);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && state.drawerAsset && !document.querySelector('dialog[open]')) {
+      closeDrawer();
+    }
+  });
+
   document.addEventListener('click', (e) => {
     const dismiss = e.target.closest('[data-dismiss]')?.dataset.dismiss;
     if (dismiss === 'error') state.error = state.retry = null;
@@ -300,17 +402,21 @@ function wire() {
       store?.set({ keyRisky: false });
     }
     if (dismiss) update();
-
     if (e.target.closest('[data-close]')) e.target.closest('dialog').close();
-    if (e.target instanceof HTMLDialogElement && e.target.id !== 'confirm') e.target.close(); // backdrop click
+    if (e.target instanceof HTMLDialogElement && e.target.id !== 'confirm') e.target.close();
   });
 
   $('search').addEventListener('input', (e) => { state.query = e.target.value; update(); });
+  $('holdings-filters').addEventListener('click', (e) => {
+    const f = e.target.closest('[data-hfilter]')?.dataset.hfilter;
+    if (f) { state.holdingsFilter = f; update(); }
+  });
   $('hide-small').addEventListener('change', (e) => {
     state.hideSmall = e.target.checked;
     store?.set({ hideSmall: state.hideSmall });
     update();
   });
+
   $('holdings').querySelector('thead').addEventListener('click', (e) => {
     const key = e.target.closest('button')?.dataset.sort;
     if (!key) return;
@@ -320,12 +426,39 @@ function wire() {
   });
   $('holdings-body').addEventListener('click', (e) => {
     const tr = e.target.closest('tr');
-    if (tr) openDetail(tr);
+    if (tr) openDrawer(tr.dataset.asset, tr);
   });
   $('holdings-body').addEventListener('keydown', (e) => {
     if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('tr')) {
       e.preventDefault();
-      openDetail(e.target);
+      openDrawer(e.target.dataset.asset, e.target);
+    }
+  });
+
+  $('order-search').addEventListener('input', (e) => { state.orderQuery = e.target.value; update(); });
+  $('order-side-filters').addEventListener('click', (e) => {
+    const s = e.target.closest('[data-oside]')?.dataset.oside;
+    if (s) { state.orderSide = s; update(); }
+  });
+  $('order-type-filters').addEventListener('click', (e) => {
+    const t = e.target.closest('[data-otype]')?.dataset.otype;
+    if (t) { state.orderType = t; update(); }
+  });
+  $('open-orders').querySelector('thead').addEventListener('click', (e) => {
+    const key = e.target.closest('button')?.dataset.osort;
+    if (!key) return;
+    const same = state.orderSort.key === key;
+    state.orderSort = { key, dir: same ? (state.orderSort.dir === 'asc' ? 'desc' : 'asc') : key === 'symbol' ? 'asc' : 'desc' };
+    update();
+  });
+  $('open-orders-body').addEventListener('click', (e) => {
+    const tr = e.target.closest('tr');
+    if (tr) openDrawer(tr.dataset.orderAsset, tr);
+  });
+  $('open-orders-body').addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('tr')) {
+      e.preventDefault();
+      openDrawer(e.target.dataset.orderAsset, e.target);
     }
   });
 
@@ -364,7 +497,11 @@ function wire() {
 async function bootDemo() {
   const { demo } = await import('./demo-data.js');
   balances = demo.balances;
+  state.balancesDetail = demo.balancesDetail;
   tickers = { ...demo.tickers };
+  state.open24h = { ...demo.open24h };
+  exchange = demo.exchangeSymbols;
+  state.rawOpenOrders = demo.openOrders;
   state.lastSyncedAt = demo.lastSyncedAt;
   recompute(demo.rows, demo.priceRows);
 
@@ -372,9 +509,14 @@ async function bootDemo() {
   if (view === 'setup' || view === 'locked') state.screen = view;
   if (view === 'syncing') state.sync = { phase: 'trades', done: 12, total: 140, symbol: 'BTCUSDT', newTrades: 3204, stopping: false };
   if (view === 'error') state.error = 'Không kết nối được tới Binance. Kiểm tra mạng rồi thử lại.';
+  if (view === 'orders') state.tab = 'orders';
+  if (view === 'drawer') state.drawerAsset = 'BTC';
   if (view === 'empty') {
     state.rows = [];
     state.summary = summarize([]);
+    state.rawOpenOrders = [];
+    state.openOrders = [];
+    state.ordersSummary = summarizeOpenOrders([]);
     state.lastSyncedAt = null;
   }
   update();
