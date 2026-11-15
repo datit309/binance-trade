@@ -1,4 +1,4 @@
-// Sample account for ?demo=1. Runs through the real cost engine; touches no chrome.*, DB or network.
+// Sample account for ?demo=1. Runs through the real cost engine; touches no chrome.* or DB. Prices then follow the live public stream.
 
 const BNB_PRICE = 600;
 let nextId = 1;

@@ -126,6 +126,14 @@ input[type="checkbox"] { width: 14px; height: 14px; accent-color: var(--accent);
 #sync-status::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--up); margin-right: 6px; vertical-align: 1px; }
 #sync-status.stale::before { background: var(--muted); }
 #sync-status.busy::before { background: var(--accent); animation: pulse 1s infinite; }
+#live-status { font-size: 12px; margin-right: 8px; }
+#live-status::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); margin-right: 6px; vertical-align: 1px; }
+#live-status.on { color: var(--up); }
+#live-status.on::before { background: var(--up); animation: pulse 1.6s infinite; }
+td.tick-up { animation: tick-up 0.7s ease-out; }
+td.tick-down { animation: tick-down 0.7s ease-out; }
+@keyframes tick-up { from { background: var(--up-bg); color: var(--up); } }
+@keyframes tick-down { from { background: var(--down-bg); color: var(--down); } }
 @keyframes pulse { 50% { opacity: 0.25; } }
 
 .page { max-width: 1440px; margin: 0 auto; padding: 14px 20px 40px; display: grid; gap: 12px; }

@@ -4,6 +4,7 @@ import { buildRows, summarize } from './portfolio.js';
 import { createClient } from './binance.js';
 import { pickSymbols, estimateMinutes, syncTrades, syncPrices, makePriceAt, toTrade } from './sync.js';
 import { tradesToCsv, download } from './export.js';
+import { openTicker } from './live.js';
 import { render, showDetail, renderSettings, askConfirm } from './ui.js';
 
 const $ = (id) => document.getElementById(id);
@@ -16,6 +17,7 @@ const state = {
   sync: null, // { phase, done, total, symbol, newTrades, stopping }
   lastSyncedAt: null,
   error: null, retry: null,
+  live: false,
   keyWarning: false, keyError: null, keyBusy: false, hasKey: false,
   hideSmall: true, query: '', sort: { key: 'value', dir: 'desc' },
   apiKey: '', extraAssets: [], extraError: null,
@@ -27,6 +29,9 @@ let exchange = null; // [{symbol, base, quote}], cached for the session
 let balances = null;
 let tickers = null;
 let abort = null;
+let ticker = null; // live price socket
+let tickerKey = '';
+let repaintQueued = false;
 const store = globalThis.chrome?.storage?.local;
 
 const update = () => render(state);
@@ -39,11 +44,43 @@ function setError(e, retry = null) {
 
 function recompute(tradeRows, priceRows) {
   state.positions = computePositions(tradeRows.map(toTrade), makePriceAt(priceRows));
+  rebuildRows();
+  watchPrices();
+}
+
+function rebuildRows() {
   // Without live balances (offline), fall back to what the trade history says is held.
   const held = balances ?? Object.fromEntries(
     Object.values(state.positions).filter((p) => p.qty > 0).map((p) => [p.asset, p.qty]));
   state.rows = buildRows(state.positions, held, tickers ?? {});
   state.summary = summarize(state.rows);
+}
+
+/** Streams prices for the coins actually held; reconnects only when that set changes. */
+function watchPrices() {
+  const symbols = state.rows.filter((r) => r.balance > 0 && r.price != null).map((r) => r.asset + 'USDT').sort();
+  const key = symbols.join(',');
+  if (key === tickerKey) return;
+  tickerKey = key;
+  ticker?.close();
+  ticker = openTicker({
+    symbols,
+    onStatus: (connected) => { state.live = connected; update(); },
+    onPrice: (symbol, price) => {
+      tickers[symbol] = price;
+      if (repaintQueued) return;
+      repaintQueued = true;
+      // Ticks arrive per symbol; repaint at most twice a second.
+      setTimeout(() => { repaintQueued = false; rebuildRows(); update(); }, 500);
+    },
+  });
+}
+
+function stopPrices() {
+  ticker?.close();
+  ticker = null;
+  tickerKey = '';
+  state.live = false;
 }
 
 async function refresh() {
@@ -150,6 +187,7 @@ async function removeKey() {
   abort?.abort();
   await store.remove(['apiKey', 'secret', 'keyRisky']);
   api = null;
+  stopPrices();
   balances = tickers = null;
   Object.assign(state, { apiKey: '', hasKey: false, keyWarning: false, screen: 'setup', keyError: null });
   $('settings').close();
@@ -312,7 +350,7 @@ function wire() {
 async function bootDemo() {
   const { demo } = await import('./demo-data.js');
   balances = demo.balances;
-  tickers = demo.tickers;
+  tickers = { ...demo.tickers };
   state.lastSyncedAt = demo.lastSyncedAt;
   recompute(demo.rows, demo.priceRows);
 

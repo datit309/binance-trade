@@ -80,7 +80,11 @@ const movedOut = (r) => r.balance > 0 && r.movedOutQty * (r.price ?? 1) >= 1;
 const dash = () => h('span', { class: 'zero' }, '—');
 const flat = (n) => n == null || Math.abs(n) < 0.005;
 
+const lastPrice = new Map(); // asset -> price at previous render, for the tick flash
+
 function holdingRow(r, colors) {
+  const prev = lastPrice.get(r.asset);
+  const tick = prev == null || r.price == null || prev === r.price ? '' : r.price > prev ? 'tick-up' : 'tick-down';
   const color = colors.get(r.asset) ?? OTHER;
   const coin = h('div', { class: 'coin' }, [
     h('span', { class: 'dot', style: `background:${r.alloc == null ? 'transparent' : color}` }),
@@ -97,7 +101,7 @@ function holdingRow(r, colors) {
     h('td', { class: 'left' }, coin),
     h('td', { class: held ? '' : 'zero' }, fmtQty(r.balance)),
     h('td', {}, r.avg == null ? dash() : fmtPrice(r.avg)),
-    h('td', {}, r.price == null ? dash() : fmtPrice(r.price)),
+    h('td', { class: tick }, r.price == null ? dash() : fmtPrice(r.price)),
     h('td', {}, hasPnl ? h('span', { class: 'pill ' + tone(r.unrealized) }, fmtPct(r.unrealizedPct)) : dash()),
     h('td', { class: 'opt' }, r.costHeld > 0 ? fmtUsd(r.costHeld) : dash()),
     h('td', { class: 'strong' }, held && r.value != null ? fmtUsd(r.value) : dash()),
@@ -130,6 +134,8 @@ export function render(state) {
   $('sync-status').textContent = syncing ? 'Đang đồng bộ'
     : state.lastSyncedAt ? `Đồng bộ lúc ${fmtClock(state.lastSyncedAt)}` : 'Chưa đồng bộ';
   $('sync-status').className = 'muted mono ' + (syncing ? 'busy' : state.lastSyncedAt ? '' : 'stale');
+  $('live-status').textContent = state.live ? 'Giá trực tiếp' : 'Giá chưa trực tiếp';
+  $('live-status').className = 'mono ' + (state.live ? 'on' : 'muted');
   $('btn-sync').textContent = syncing ? 'Dừng' : 'Đồng bộ';
   $('btn-sync').classList.toggle('primary', !syncing);
   $('btn-sync').disabled = state.demo || (syncing && state.sync.stopping);
@@ -173,7 +179,11 @@ export function render(state) {
 
   const rows = visibleRows(state);
   $('row-count').textContent = state.rows.length ? `${rows.length}/${state.rows.length} coin` : '';
+  const focused = document.activeElement?.closest?.('#holdings-body tr')?.dataset.asset;
   $('holdings-body').replaceChildren(...rows.map((r) => holdingRow(r, allocation.colors)));
+  for (const r of state.rows) lastPrice.set(r.asset, r.price);
+  // Live repaints rebuild the rows; keep keyboard focus where it was.
+  if (focused) $('holdings-body').querySelector(`tr[data-asset="${CSS.escape(focused)}"]`)?.focus();
   $('holdings').hidden = rows.length === 0;
   $('empty').hidden = rows.length > 0;
   const noData = state.rows.length === 0;
