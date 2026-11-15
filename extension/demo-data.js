@@ -55,15 +55,68 @@ trade('PEPEUSDT', 'PEPE', 'USDT', 'SELL', 0.0000121, 20000000, [7, 2, 9], 'USDT'
 trade('ETHUSDT', 'ETH', 'USDT', 'SELL', 2610, 0.4, [11, 2, 15]);
 trade('BTCUSDT', 'BTC', 'USDT', 'BUY', 62850, 0.012, [11, 9, 7]);
 
+const balances = {
+  BTC: 0.18348, ETH: 1.1, SOL: 14.2, ARB: 1200, LINK: 35, NEWT: 500, BNB: 2.458, USDT: 1840.55, PEPE: 0,
+};
+
 export const demo = {
   rows,
   priceRows,
-  balances: {
-    BTC: 0.18348, ETH: 1.1, SOL: 14.2, ARB: 1200, LINK: 35, NEWT: 500, BNB: 2.458, USDT: 1840.55, PEPE: 0,
+  balances,
+  balancesDetail: {
+    total: balances,
+    free: {
+      BTC: 0.13348, ETH: 0.6, SOL: 10.2, ARB: 1200, LINK: 35, NEWT: 500, BNB: 2.458, USDT: 450.05, PEPE: 0,
+    },
+    locked: {
+      BTC: 0.05, ETH: 0.5, SOL: 4.0, ARB: 0, LINK: 0, NEWT: 0, BNB: 0, USDT: 1390.5, PEPE: 0,
+    },
   },
   tickers: {
     BTCUSDT: 67450, ETHUSDT: 2380, SOLUSDT: 139.1, ARBUSDT: 0.71, LINKUSDT: 15.84, BNBUSDT: 612,
     DOGEUSDT: 0.162, PEPEUSDT: 0.0000098,
   },
+  open24h: {
+    BTCUSDT: 65820, ETHUSDT: 2445, SOLUSDT: 134.8, ARBUSDT: 0.735, LINKUSDT: 15.12, BNBUSDT: 604,
+    DOGEUSDT: 0.155, PEPEUSDT: 0.0000102,
+  },
+  exchangeSymbols: [
+    { symbol: 'BTCUSDT', base: 'BTC', quote: 'USDT' },
+    { symbol: 'ETHUSDT', base: 'ETH', quote: 'USDT' },
+    { symbol: 'SOLUSDT', base: 'SOL', quote: 'USDT' },
+    { symbol: 'ARBUSDT', base: 'ARB', quote: 'USDT' },
+    { symbol: 'LINKUSDT', base: 'LINK', quote: 'USDT' },
+    { symbol: 'NEWTUSDT', base: 'NEWT', quote: 'USDT' },
+    { symbol: 'BNBUSDT', base: 'BNB', quote: 'USDT' },
+    { symbol: 'DOGEUSDT', base: 'DOGE', quote: 'USDT' },
+    { symbol: 'PEPEUSDT', base: 'PEPE', quote: 'USDT' },
+  ],
+  openOrders: [
+    {
+      symbol: 'BTCUSDT', orderId: 9101, orderListId: -1, side: 'SELL', type: 'LIMIT',
+      price: '74500', stopPrice: '0', origQty: '0.05', executedQty: '0',
+      status: 'NEW', time: Date.now() - 2 * 3_600_000, updateTime: Date.now() - 2 * 3_600_000,
+    },
+    {
+      symbol: 'BTCUSDT', orderId: 9102, orderListId: -1, side: 'BUY', type: 'LIMIT',
+      price: '61500', stopPrice: '0', origQty: '0.02', executedQty: '0.008',
+      status: 'PARTIALLY_FILLED', time: Date.now() - 9 * 3_600_000, updateTime: Date.now() - 1_800_000,
+    },
+    {
+      symbol: 'ETHUSDT', orderId: 9103, orderListId: 77, side: 'SELL', type: 'STOP_LOSS_LIMIT',
+      price: '2180', stopPrice: '2200', origQty: '0.5', executedQty: '0',
+      status: 'NEW', time: Date.now() - 18 * 3_600_000, updateTime: Date.now() - 18 * 3_600_000,
+    },
+    {
+      symbol: 'SOLUSDT', orderId: 9104, orderListId: -1, side: 'SELL', type: 'LIMIT_MAKER',
+      price: '165', stopPrice: '0', origQty: '4', executedQty: '0',
+      status: 'NEW', time: Date.now() - 28 * 3_600_000, updateTime: Date.now() - 28 * 3_600_000,
+    },
+    {
+      symbol: 'DOGEUSDT', orderId: 9105, orderListId: -1, side: 'BUY', type: 'LIMIT',
+      price: '0.145', stopPrice: '0', origQty: '4500', executedQty: '0',
+      status: 'NEW', time: Date.now() - 36 * 3_600_000, updateTime: Date.now() - 36 * 3_600_000,
+    },
+  ],
   lastSyncedAt: Date.now() - 4 * 60_000,
 };

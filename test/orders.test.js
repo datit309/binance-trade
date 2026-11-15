@@ -142,3 +142,14 @@ test('parseSymbolPair phân giải symbol từ exchangeMap và fallback', () => 
   assert.deepEqual(parseSymbolPair('BNBUSDC', map), { base: 'BNB', quote: 'USDC' });
   assert.deepEqual(parseSymbolPair('UNKNOWN', map), { base: 'UNKNOWN', quote: '' });
 });
+
+test('demo data hợp lệ qua buildOpenOrders và summarizeOpenOrders', async () => {
+  const { demo } = await import('../extension/demo-data.js');
+  const parsed = buildOpenOrders(demo.openOrders, demo.exchangeSymbols, demo.tickers);
+  assert.equal(parsed.length, demo.openOrders.length);
+  const summary = summarizeOpenOrders(parsed);
+  assert.ok(summary.buyCount > 0 && summary.sellCount > 0);
+  for (const [asset, total] of Object.entries(demo.balances)) {
+    approx(demo.balancesDetail.free[asset] + demo.balancesDetail.locked[asset], total, asset);
+  }
+});
