@@ -194,3 +194,14 @@ test('toTrade', () => {
     commission: 0.002, commissionAsset: 'BTC', time: 1007, isBuyer: true,
   });
 });
+
+test('quét toàn bộ chạy tiếp: bỏ qua symbol vừa quét', async () => {
+  const db = fakeDb({ cursors: [{ symbol: 'BTCUSDT', base: 'BTC', quote: 'USDT', last_trade_id: 5, last_synced_at: 9_000 }] });
+  const asked = [];
+  const api = { async myTrades(symbol) { asked.push(symbol); return []; } };
+  const symbols = [...BTC, { symbol: 'ETHUSDT', base: 'ETH', quote: 'USDT' }];
+  await syncTrades({ api, db, symbols, skipSyncedSince: 8_000 });
+  assert.deepEqual(asked, ['ETHUSDT']);
+  await syncTrades({ api, db, symbols, skipSyncedSince: 9_500 });
+  assert.deepEqual(asked, ['ETHUSDT', 'BTCUSDT', 'ETHUSDT']);
+});

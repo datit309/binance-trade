@@ -16,6 +16,12 @@ export async function openDb() {
     else resolve(result);
   };
 
+  // Without this a failed worker or WASM load would leave every call pending forever.
+  worker.onerror = (e) => {
+    for (const { reject } of pending.values()) reject(new Error(e.message || 'không tải được SQLite'));
+    pending.clear();
+  };
+
   const call = (method, ...args) =>
     new Promise((resolve, reject) => {
       const id = nextId++;

@@ -38,8 +38,11 @@ export function toTrade(r) {
 }
 
 /** Resumable: the cursor is written after each stored page, so a crash never leaves a gap. */
-export async function syncTrades({ api, db, symbols, onProgress, signal }) {
-  const cursors = new Map((await db.getCursors()).map((c) => [c.symbol, c.last_trade_id]));
+export async function syncTrades({ api, db, symbols, onProgress, signal, skipSyncedSince = Infinity }) {
+  const saved = await db.getCursors();
+  const cursors = new Map(saved.map((c) => [c.symbol, c.last_trade_id]));
+  // Lets an interrupted full scan pick up where it stopped instead of re-querying every pair.
+  const fresh = new Set(saved.filter((c) => c.last_synced_at >= skipSyncedSince).map((c) => c.symbol));
   let newTrades = 0;
 
   for (let i = 0; i < symbols.length; i++) {
@@ -47,7 +50,7 @@ export async function syncTrades({ api, db, symbols, onProgress, signal }) {
     const { symbol, base, quote } = symbols[i];
     let cursor = cursors.get(symbol) ?? null;
 
-    for (;;) {
+    for (; !fresh.has(symbol);) {
       const page = await api.myTrades(symbol, (cursor ?? -1) + 1);
       if (page.length > 0) {
         await db.insertTrades(page.map((t) => toRow(t, base, quote)));

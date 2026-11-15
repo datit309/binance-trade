@@ -39,6 +39,7 @@ export function computePositions(trades, priceAt) {
   const dispose = (trade, asset, qty, usdt, side = 'SELL') => {
     if (STABLES.has(asset)) return;
     const p = pos(asset);
+    const before = p.qty;
     const known = Math.min(qty, p.qty);
     if (qty > p.qty * (1 + 1e-9)) p.oversold = true;
     const avg = p.qty > 0 ? p.cost / p.qty : 0;
@@ -46,7 +47,8 @@ export function computePositions(trades, priceAt) {
     p.realized += usdt * (qty > 0 ? known / qty : 0) - avg * known;
     p.cost -= avg * known;
     p.qty -= known;
-    if (p.qty < DUST) {
+    // Relative threshold: float residue scales with the size of the position.
+    if (p.qty <= Math.max(DUST, before * 1e-9)) {
       p.qty = 0;
       p.cost = 0;
     }

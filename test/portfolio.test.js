@@ -73,3 +73,15 @@ test('tổng', () => {
     { BTC: 1 }, { BTCUSDT: 150 });
   check(summarize(rows), { costHeld: 100, value: 150, unrealized: 50, unrealizedPct: 50, realized: 30 });
 });
+
+test('tổng: giá trị gồm cả coin không rõ giá vốn, bỏ coin không có giá', () => {
+  const rows = buildRows(
+    { A: position('A', 1, 100), B: position('B', 1, 100) },
+    { A: 1, B: 1, BTC: 1 }, { BUSDT: 150, BTCUSDT: 60000 });
+  check(summarize(rows), { costHeld: 200, value: 60150, unrealized: 50 });
+});
+
+test('bỏ số dư Earn (LD…) nhưng giữ coin thật tên bắt đầu bằng LD', () => {
+  const rows = buildRows({}, { LDBTC: 1, LDUSDT: 50, LDO: 10 }, { BTCUSDT: 60000, LDOUSDT: 2 });
+  assert.deepEqual(rows.map((r) => r.asset), ['LDO']);
+});

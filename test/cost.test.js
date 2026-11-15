@@ -105,3 +105,22 @@ test('lịch sử', () => {
   assert.equal(BTC.history.length, 2);
   check(BTC.history[1], { side: 'BUY', price: 200, qtyAfter: 2, avgAfter: 150 });
 });
+
+test('bụi số thực ở số lượng lớn', () => {
+  let seed = 42;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  for (let run = 0; run < 300; run++) {
+    const trades = [];
+    let held = 0;
+    for (let i = 0; i < 5; i++) {
+      const qty = Number((1e5 + rnd() * 1e7).toFixed(2));
+      const fee = Number((qty * 0.001).toFixed(8));
+      held += qty - fee;
+      trades.push(buy('ALT', qty, qty * 0.37, { commission: fee, commissionAsset: 'ALT' }));
+    }
+    trades.push(sell('ALT', Number(held.toFixed(8)), held * 0.5));
+    const { ALT } = computePositions(trades, none);
+    assert.equal(ALT.qty, 0, `run ${run}: left ${ALT.qty}`);
+    assert.equal(ALT.avg, 0);
+  }
+});

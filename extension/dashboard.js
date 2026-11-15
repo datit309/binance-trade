@@ -85,7 +85,9 @@ async function runSync(full) {
       extraAssets: state.extraAssets,
       full,
     });
-    await syncTrades({ api, db, symbols, onProgress, signal });
+    // A full scan skips pairs checked in the last hour, so restarting an interrupted one resumes.
+    const skipSyncedSince = full ? Date.now() - 3_600_000 : Infinity;
+    await syncTrades({ api, db, symbols, onProgress, signal, skipSyncedSince });
     if (!signal.aborted) {
       const trades = (await db.allTrades()).map(toTrade);
       await syncPrices({ api, db, trades, exchangeSymbols, onProgress, signal });
@@ -166,7 +168,7 @@ async function scanFull() {
     const n = (await getExchange()).length;
     const ok = await askConfirm(
       `Quét toàn bộ ${n.toLocaleString('en-US')} cặp trên Binance, mất khoảng ${estimateMinutes(n)} phút. ` +
-      'Giữ tab này mở trong lúc quét; nếu đóng, lần sau sẽ chạy tiếp từ chỗ dừng.', 'Quét toàn bộ');
+      'Giữ tab này mở trong lúc quét. Nếu bị ngắt, bấm Quét toàn bộ lại trong vòng 1 giờ để chạy tiếp từ chỗ dừng.', 'Quét toàn bộ');
     if (!ok) return;
     $('settings').close();
     await runSync(true);

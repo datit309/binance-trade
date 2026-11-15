@@ -1,6 +1,14 @@
 // Joins computed positions with real Spot balances and current prices for display.
 import { STABLES } from './cost.js';
 
+// Binance reports Simple Earn holdings in the Spot account as LD<asset> (LDBTC, LDUSDT). Earn is out of scope,
+// so they are dropped; a real coin such as LDO has its own USDT pair and is kept.
+function isEarnWrapper(asset, tickers) {
+  if (!asset.startsWith('LD') || asset.length < 4 || tickers[asset + 'USDT'] != null) return false;
+  const inner = asset.slice(2);
+  return STABLES.has(inner) || tickers[inner + 'USDT'] != null;
+}
+
 /**
  * @param positions output of computePositions
  * @param balances  { [asset]: free + locked }
@@ -13,6 +21,7 @@ export function buildRows(positions, balances, tickers) {
   for (const asset of assets) {
     if (STABLES.has(asset)) continue;
     const p = positions[asset];
+    if (!p && isEarnWrapper(asset, tickers)) continue;
     const balance = balances[asset] ?? 0;
     const qty = p?.qty ?? 0;
     const realized = p?.realized ?? 0;
@@ -49,16 +58,18 @@ export function buildRows(positions, balances, tickers) {
 
 export function summarize(rows) {
   let costHeld = 0;
+  let value = 0;
   let unrealized = 0;
   let realized = 0;
   for (const r of rows) {
     costHeld += r.costHeld;
+    value += r.value ?? 0; // whole Spot balance, so it matches the table and the allocation bar
     unrealized += r.unrealized ?? 0;
     realized += r.realized;
   }
   return {
     costHeld,
-    value: costHeld + unrealized,
+    value,
     unrealized,
     unrealizedPct: costHeld > 0 ? (unrealized / costHeld) * 100 : null,
     realized,
