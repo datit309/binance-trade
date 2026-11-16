@@ -77,7 +77,7 @@ function renderAlloc({ ranked, colors }) {
   ])));
 }
 
-const movedOut = (r) => r.balance > 0 && r.movedOutQty * (r.price ?? 1) >= 1;
+export const movedOut = (r) => (r.movedOutQty ?? 0) * (r.price ?? 1) >= 1;
 const lastPrice = new Map();
 let historyKey = '';
 let chartKey = '';
@@ -91,36 +91,76 @@ function pct24h(price, open) {
   return ((price - open) / open) * 100;
 }
 
-function holdingRow(r, state, colors) {
+export function holdingRow(r, state, colors) {
   const prev = lastPrice.get(r.asset);
   const tick = prev == null || r.price == null || prev === r.price ? '' : r.price > prev ? 'tick-up' : 'tick-down';
   const color = colors.get(r.asset) ?? OTHER;
   const locked = state.balancesDetail?.locked?.[r.asset] ?? 0;
   const orderCount = state.ordersSummary?.byAsset?.[r.asset]?.length ?? 0;
   const chg = pct24h(r.price, state.open24h?.[r.asset + 'USDT']);
+  const isMoved = movedOut(r);
+
+  const coinMeta = [
+    h('b', {}, r.asset),
+    orderCount > 0 ? h('span', { class: 'tag ord' }, `${orderCount} lệnh chờ`) : null,
+    ...r.warn.map((w) => h('span', { class: 'tag', title: EXPLAIN[w](r) }, BADGES[w](r))),
+  ];
+  if (r.balance === 0 && isMoved) {
+    coinMeta.push(h('span', { class: 'tag plain', title: 'Toàn bộ số coin đã chuyển sang Earn/Funding/Ví ngoài. Giá trung bình không đổi.' }, `Earn: ${fmtQty(r.movedOutQty)}`));
+  } else if (isMoved) {
+    coinMeta.push(h('span', { class: 'tag plain', title: 'Đã rút hoặc chuyển sang Earn/Funding. Giá trung bình không đổi.' }, `chuyển ra ${fmtQty(r.movedOutQty)}`));
+  }
 
   const coin = h('div', { class: 'coin' }, [
     h('span', { class: 'avatar', style: avatarStyle(color) }, r.asset.slice(0, 3)),
-    h('div', { class: 'coin-meta' }, [
-      h('b', {}, r.asset),
-      orderCount > 0 ? h('span', { class: 'tag ord' }, `${orderCount} lệnh chờ`) : null,
-      ...r.warn.map((w) => h('span', { class: 'tag', title: EXPLAIN[w](r) }, BADGES[w](r))),
-      movedOut(r)
-        ? h('span', { class: 'tag plain', title: 'Đã rút hoặc chuyển sang Earn/Funding. Giá trung bình không đổi.' }, `chuyển ra ${fmtQty(r.movedOutQty)}`)
-        : null,
-    ]),
+    h('div', { class: 'coin-meta' }, coinMeta),
   ]);
-  const hasPnl = r.unrealized != null && r.knownQty > 0;
+  const hasSpotPnl = r.unrealized != null && r.knownQty > 0;
+  const hasEarnPnl = r.balance === 0 && r.movedOutUnrealized != null && (r.movedOutQty ?? 0) > 0;
   const held = r.balance > 0;
+
+  const qtyCell = held
+    ? h('div', { class: 'cell-stack' }, [
+        h('span', {}, fmtQty(r.balance)),
+        locked > 0 ? h('span', { class: 'cell-sub lock' }, `Khóa: ${fmtQty(locked)}`) : null,
+      ])
+    : (r.movedOutQty > 0
+        ? h('div', { class: 'cell-stack' }, [
+            h('span', { class: 'zero' }, '0.00'),
+            h('span', { class: 'cell-sub warn', title: 'Đã chuyển sang Earn/Ví ngoài' }, `Earn: ${fmtQty(r.movedOutQty)}`),
+          ])
+        : h('span', { class: 'zero' }, '0.00'));
+
+  const valueCell = (held && r.value != null)
+    ? h('div', { class: 'cell-stack' }, [
+        h('span', {}, fmtUsd(r.value)),
+        r.alloc != null ? h('span', { class: 'cell-sub' }, `${r.alloc.toFixed(1)}%`) : null,
+      ])
+    : (r.balance === 0 && r.movedOutValue != null && (r.movedOutQty ?? 0) > 0
+        ? h('div', { class: 'cell-stack' }, [
+            h('span', { class: 'muted', title: 'Giá trị ước tính vị thế Earn/Ví ngoài' }, `≈ ${fmtUsd(r.movedOutValue)}`),
+            h('span', { class: 'cell-sub' }, 'Earn / Ngoài ví'),
+          ])
+        : dash());
+
+  const pnlCell = hasSpotPnl
+    ? fmtSignedUsd(r.unrealized)
+    : (hasEarnPnl
+        ? h('div', { class: 'cell-stack' }, [
+            h('span', { class: tone(r.movedOutUnrealized) }, fmtSignedUsd(r.movedOutUnrealized)),
+            h('span', { class: 'cell-sub' }, 'ước tính'),
+          ])
+        : dash());
+
+  const pctCell = hasSpotPnl
+    ? h('span', { class: 'pill ' + tone(r.unrealized) }, fmtPct(r.unrealizedPct))
+    : (hasEarnPnl
+        ? h('span', { class: 'pill ' + tone(r.movedOutUnrealized), title: 'Hiệu suất ước tính vị thế đã chuyển ví/Earn' }, fmtPct(r.movedOutUnrealizedPct))
+        : dash());
 
   return h('tr', { tabindex: '0', 'data-asset': r.asset, 'aria-label': `Xem chi tiết ${r.asset}` }, [
     h('td', { class: 'left' }, coin),
-    h('td', { class: held ? '' : 'zero' }, [
-      h('div', { class: 'cell-stack' }, [
-        h('span', {}, fmtQty(r.balance)),
-        locked > 0 ? h('span', { class: 'cell-sub lock' }, `Khóa: ${fmtQty(locked)}`) : null,
-      ]),
-    ]),
+    h('td', { class: held ? '' : 'zero' }, qtyCell),
     h('td', {}, [
       h('div', { class: 'cell-stack' }, [
         h('div', { class: 'price-line' }, [
@@ -131,12 +171,9 @@ function holdingRow(r, state, colors) {
         chg != null ? h('span', { class: 'chg-badge ' + tone(chg) }, `24h ${fmtPct(chg)}`) : null,
       ]),
     ]),
-    h('td', {}, held && r.value != null ? h('div', { class: 'cell-stack' }, [
-      h('span', {}, fmtUsd(r.value)),
-      r.alloc != null ? h('span', { class: 'cell-sub' }, `${r.alloc.toFixed(1)}%`) : null,
-    ]) : dash()),
-    h('td', { class: tone(r.unrealized) }, hasPnl ? fmtSignedUsd(r.unrealized) : dash()),
-    h('td', {}, hasPnl ? h('span', { class: 'pill ' + tone(r.unrealized) }, fmtPct(r.unrealizedPct)) : dash()),
+    h('td', {}, valueCell),
+    h('td', { class: hasSpotPnl ? tone(r.unrealized) : (hasEarnPnl ? tone(r.movedOutUnrealized) : '') }, pnlCell),
+    h('td', {}, pctCell),
   ]);
 }
 
@@ -227,16 +264,26 @@ function renderDrawer(state, colors) {
     $('drawer-change24h').textContent = `24h ${fmtPct(chg)}`;
     $('drawer-change24h').className = 'chg-badge num ' + tone(chg);
   }
-  $('drawer-balance-sub').textContent = `Tổng: ${fmtQty(row.balance)} · Khả dụng: ${fmtQty(free)} · Khóa lệnh: ${fmtQty(locked)}`;
+  const earnSub = row.balance === 0 && (row.movedOutQty ?? 0) > 0 ? ` · Vị thế đã mua (Earn/Ngoài ví): ${fmtQty(row.movedOutQty)}` : '';
+  $('drawer-balance-sub').textContent = `Tổng Spot: ${fmtQty(row.balance)} · Khả dụng: ${fmtQty(free)} · Khóa lệnh: ${fmtQty(locked)}${earnSub}`;
 
+  const hasSpotCost = row.costHeld > 0;
+  const hasEarnCost = row.balance === 0 && (row.movedOutCost ?? 0) > 0;
   $('drawer-avg').textContent = fmtPrice(row.avg);
   $('drawer-now').textContent = fmtPrice(row.price);
-  $('drawer-cost').textContent = row.costHeld > 0 ? `${fmtUsd(row.costHeld)} USDT` : '—';
-  $('drawer-realized').textContent = fmtSignedUsd(row.realized);
-  $('drawer-realized').className = 'num ' + tone(row.realized);
+  $('drawer-cost').textContent = hasSpotCost
+    ? `${fmtUsd(row.costHeld)} USDT`
+    : (hasEarnCost ? `≈ ${fmtUsd(row.movedOutCost)} USDT (Earn)` : '—');
+  const hasEarnPnl = row.balance === 0 && row.movedOutUnrealized != null && (row.movedOutQty ?? 0) > 0;
+  $('drawer-realized').textContent = hasEarnPnl
+    ? `${fmtSignedUsd(row.movedOutUnrealized)} (lãi tạm tính)`
+    : fmtSignedUsd(row.realized);
+  $('drawer-realized').className = 'num ' + tone(hasEarnPnl ? row.movedOutUnrealized : row.realized);
 
   const notes = row.warn.map((w) => h('li', {}, EXPLAIN[w](row)));
-  if (movedOut(row)) {
+  if (row.balance === 0 && (row.movedOutQty ?? 0) > 0) {
+    notes.push(h('li', { class: 'plain' }, `Toàn bộ ${fmtQty(row.movedOutQty)} ${asset} đã được chuyển khỏi ví Spot (sang Simple Earn, Funding hoặc rút ví). Lịch sử mua Spot vẫn ghi nhận đầy đủ giá vốn trung bình là ${fmtPrice(row.avg)} USDT.`));
+  } else if (movedOut(row)) {
     notes.push(h('li', { class: 'plain' }, `Đã chuyển ${fmtQty(row.movedOutQty)} ${asset} ra khỏi ví Spot (rút, Earn, Funding). Giá trung bình không đổi.`));
   }
   if (row.warn.includes('unknown')) {

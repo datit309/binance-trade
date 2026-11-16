@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { visibleRows, historyRow } from '../extension/ui.js';
+import { visibleRows, historyRow, holdingRow, movedOut } from '../extension/ui.js';
 
 const baseState = {
   query: '',
@@ -82,6 +82,59 @@ test('historyRow hiển thị lệnh unpriced chuẩn xác', () => {
     const row = historyRow(tr);
     assert.equal(row.children[3].children[0], '—');
     assert.equal(row.children[6].children[0], '— (chưa có giá)');
+  } finally {
+    if (prevDoc) globalThis.document = prevDoc;
+    else delete globalThis.document;
+  }
+});
+
+test('movedOut nhận diện cả khi balance = 0 nhưng movedOutQty > 0', () => {
+  assert.equal(movedOut({ balance: 0, movedOutQty: 1, price: 100 }), true);
+  assert.equal(movedOut({ balance: 0, movedOutQty: 0, price: 100 }), false);
+});
+
+test('holdingRow hiển thị thông tin Earn ước tính khi balance = 0 và qty > 0', () => {
+  const prevDoc = globalThis.document;
+  globalThis.document = {
+    createElement: (tag) => ({
+      tag,
+      setAttribute() {},
+      children: [],
+      append(...items) { this.children.push(...items); },
+    }),
+  };
+  try {
+    const r = {
+      asset: 'BTC',
+      balance: 0,
+      qty: 1,
+      avg: 60000,
+      price: 90000,
+      value: 0,
+      knownQty: 0,
+      costHeld: 0,
+      unrealized: null,
+      unrealizedPct: null,
+      movedOutQty: 1,
+      movedOutCost: 60000,
+      movedOutValue: 90000,
+      movedOutUnrealized: 30000,
+      movedOutUnrealizedPct: 50,
+      warn: [],
+      realized: 0,
+    };
+    const rowEl = holdingRow(r, { balancesDetail: {}, ordersSummary: {}, open24h: {} }, new Map());
+    // Cột số lượng (td 1) phải chứa text Earn
+    const balanceCell = rowEl.children[1];
+    assert.ok(balanceCell.children[0].children[1].children[0].includes('Earn: 1'));
+
+    // Cột giá trị (td 3) không được là dash() mà phải là giá trị ước tính
+    const valueCell = rowEl.children[3];
+    assert.ok(valueCell.children[0].children[0].children[0].includes('90,000'));
+
+    // Cột lãi/lỗ (td 4) phải hiển thị lãi ước tính
+    const pnlCell = rowEl.children[4];
+    assert.ok(pnlCell.children[0].children[0].children[0].includes('30,000'));
   } finally {
     if (prevDoc) globalThis.document = prevDoc;
     else delete globalThis.document;
