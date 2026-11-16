@@ -85,3 +85,14 @@ test('bỏ số dư Earn (LD…) nhưng giữ coin thật tên bắt đầu bằ
   const rows = buildRows({}, { LDBTC: 1, LDUSDT: 50, LDO: 10 }, { BTCUSDT: 60000, LDOUSDT: 2 });
   assert.deepEqual(rows.map((r) => r.asset), ['LDO']);
 });
+
+test('coin chuyển hết sang Earn (balance = 0, qty > 0) vẫn tính được movedOutValue và movedOutUnrealized', () => {
+  const r = row({ BTC: position('BTC', 2, 200) }, {}, { BTCUSDT: 150 }, 'BTC');
+  assert.equal(r.balance, 0);
+  assert.equal(r.qty, 2);
+  assert.equal(r.movedOutQty, 2);
+  assert.equal(r.movedOutCost, 200);
+  assert.equal(r.movedOutValue, 300);
+  assert.equal(r.movedOutUnrealized, 100);
+  assert.equal(r.movedOutUnrealizedPct, 50);
+});

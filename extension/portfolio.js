@@ -36,6 +36,10 @@ export function buildRows(positions, balances, tickers) {
     const unrealized = price == null ? null : knownQty * price - costHeld;
     const unknownQty = Math.max(0, balance - qty);
     const movedOutQty = Math.max(0, qty - balance);
+    const movedOutCost = movedOutQty * (avg ?? 0);
+    const movedOutValue = price == null ? null : movedOutQty * price;
+    const movedOutUnrealized = (movedOutValue != null && movedOutCost > 0) ? movedOutValue - movedOutCost : null;
+    const movedOutUnrealizedPct = (movedOutCost > 0 && movedOutUnrealized != null) ? (movedOutUnrealized / movedOutCost) * 100 : null;
 
     const warn = [];
     // Ignore sub-1-USDT gaps: fee dust and rounding, not a missing purchase.
@@ -45,11 +49,12 @@ export function buildRows(positions, balances, tickers) {
     if (price == null) warn.push('noprice');
 
     rows.push({
-      asset, balance, avg, price,
+      asset, balance, qty, avg, price,
       value: price == null ? null : balance * price,
       knownQty, costHeld, unrealized,
       unrealizedPct: unrealized != null && costHeld > 0 ? (unrealized / costHeld) * 100 : null,
-      realized, unknownQty, movedOutQty, warn,
+      movedOutQty, movedOutCost, movedOutValue, movedOutUnrealized, movedOutUnrealizedPct,
+      realized, unknownQty, warn,
     });
   }
 
