@@ -514,6 +514,7 @@ async function bootDemo() {
   if (view === 'empty') {
     state.rows = [];
     state.summary = summarize([]);
+    state.balancesDetail = null;
     state.rawOpenOrders = [];
     state.openOrders = [];
     state.ordersSummary = summarizeOpenOrders([]);
